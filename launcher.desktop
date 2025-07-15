@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CapExpert
+Comment=Launch CapExpert Project with primaryAPI, importAPI, and Frontend
+Exec="/var/www/html/own_project/CapExpert/launcher.sh"
+Icon=/var/www/html/own_project/CapExpert/logo-small.svg
+Terminal=true
+Categories=Development;WebDevelopment;
+StartupNotify=true
+MimeType=
+X-KDE-StartupNotify=true 
