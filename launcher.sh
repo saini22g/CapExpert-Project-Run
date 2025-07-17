@@ -5,9 +5,11 @@
 
 set -e
 
+wait_time=30
+
 echo "🚀 Starting CapExpert Project..."
 
-# Function to display folder selection menu
+# Function to display folder selection menu with timer
 select_project_folder() {
     echo ""
     echo "📁 Please select the project folder to run:"
@@ -16,29 +18,56 @@ select_project_folder() {
     echo "3) capClone2"
     echo ""
     
-    while true; do
-        read -p "Enter your choice (1-3): " choice
-        case $choice in
-            1)
-                PROJECT_FOLDER="capClone"
-                echo "✅ Selected: capClone"
+    echo "⏰ You have ${wait_time} seconds to make a selection, or it will default to capClone"
+    echo ""
+    
+    # Countdown timer with real-time display
+    start_time=$(date +%s)
+    choice=""
+    
+    while [ -z "$choice" ]; do
+        current_time=$(date +%s)
+        elapsed=$((current_time - start_time))
+        remaining=$((wait_time - elapsed))
+        
+        if [ $remaining -le 0 ]; then
+            echo ""
+            echo "⏰ No input detected in ${wait_time} seconds. Defaulting to 1 (capClone)."
+            choice=1
+            break
+        fi
+        
+        # Clear the line and show countdown
+        echo -ne "\rEnter your choice (1-3) [Auto-selects 1 in ${remaining}s]: "
+        
+        # Read input with 1-second timeout
+        if read -t 1 input; then
+            if [[ "$input" =~ ^[1-3]$ ]]; then
+                choice=$input
+                echo ""
                 break
-                ;;
-            2)
-                PROJECT_FOLDER="capClone1"
-                echo "✅ Selected: capClone1"
-                break
-                ;;
-            3)
-                PROJECT_FOLDER="capClone2"
-                echo "✅ Selected: capClone2"
-                break
-                ;;
-            *)
+            elif [ -n "$input" ]; then
+                echo ""
                 echo "❌ Invalid choice. Please enter 1, 2, or 3."
-                ;;
-        esac
+                echo ""
+            fi
+        fi
     done
+    
+    case $choice in
+        1)
+            PROJECT_FOLDER="capClone"
+            echo "✅ Selected: capClone"
+            ;;
+        2)
+            PROJECT_FOLDER="capClone1"
+            echo "✅ Selected: capClone1"
+            ;;
+        3)
+            PROJECT_FOLDER="capClone2"
+            echo "✅ Selected: capClone2"
+            ;;
+    esac
     echo ""
 }
 
