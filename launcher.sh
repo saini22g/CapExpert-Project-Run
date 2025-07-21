@@ -156,12 +156,45 @@ start_service_tab() {
             echo '💡 Press Ctrl+C to stop this service'
             echo '----------------------------------------'
             
-            # Execute the command
-            $command
+            # Function to handle cleanup
+            cleanup_service() {
+                echo ''
+                echo '⏹️  Stopping $service_name...'
+                # Kill the npm process group if it exists
+                if [ ! -z \"\$npm_pid\" ]; then
+                    # Kill the entire process group
+                    kill -TERM -\$npm_pid 2>/dev/null || true
+                    wait \$npm_pid 2>/dev/null || true
+                fi
+                echo '✅ Service stopped.'
+            }
             
-            # Keep terminal open
+            # Function to handle Ctrl+C
+            handle_sigint() {
+                cleanup_service
+                echo '💡 Terminal will stay open. You can close it or run other commands.'
+                # Start a new bash session
+                exec bash
+            }
+            
+            # Set trap for Ctrl+C
+            trap handle_sigint SIGINT
+            
+            # Make the current shell the leader of a new process group
+            # This ensures the terminal recognizes running processes
+            set -m
+            
+            # Run the npm command in foreground (not background)
+            # This ensures output is visible and terminal warnings work
+            $command &
+            npm_pid=\$!
+            
+            # Bring it to foreground so terminal recognizes it
+            fg %1
+            
+            # If we reach here, the process ended normally
             echo ''
-            echo '⏹️  Service stopped. Terminal will stay open...'
+            echo '⏹️  Service ended normally. Terminal will stay open...'
             exec bash
         " &
     else
@@ -180,8 +213,9 @@ start_service_tab() {
 cleanup() {
     echo ""
     echo "🛑 Script interrupted by Ctrl+C"
-    echo "🏁 Script exiting..."
-    exit 0
+    echo "🏁 Launcher stopped, but services may still be running in other tabs"
+    echo "💡 Terminal will stay open..."
+    exec bash
 }
 
 trap cleanup SIGINT SIGTERM
@@ -201,12 +235,12 @@ echo "   (This may take a few minutes)"
 
 check_service $PRIMARY_API_PORT "Primary API" || {
     echo "❌ Primary API failed to start. Frontend will not start."
-    exit 1
+    exec bash
 }
 
 check_service $IMPORT_API_PORT "Import API" || {
     echo "❌ Import API failed to start. Frontend will not start."
-    exit 1
+    exec bash
 }
 
 # Now that both backends are ready, start frontend
@@ -222,4 +256,4 @@ echo "🎉 All services started successfully!"
 echo "🌐 Frontend should be available at: http://localhost:$FRONTEND_PORT"
 echo "💡 Services are running in separate tabs/windows"
 echo ""
-exit 0
+exec bash
