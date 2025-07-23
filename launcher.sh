@@ -16,6 +16,7 @@ select_project_folder() {
     echo "1) capClone"
     echo "2) capClone1" 
     echo "3) capClone2"
+    echo "4) capCloneDev"
     echo ""
     
     echo "⏰ You have ${wait_time} seconds to make a selection, or it will default to capClone"
