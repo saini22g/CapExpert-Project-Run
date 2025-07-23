@@ -38,17 +38,17 @@ select_project_folder() {
         fi
         
         # Clear the line and show countdown
-        echo -ne "\rEnter your choice (1-3) [Auto-selects 1 in ${remaining}s]: "
+        echo -ne "\rEnter your choice (1-4) [Auto-selects 1 in ${remaining}s]: "
         
         # Read input with 1-second timeout
         if read -t 1 input; then
-            if [[ "$input" =~ ^[1-3]$ ]]; then
+            if [[ "$input" =~ ^[1-4]$ ]]; then
                 choice=$input
                 echo ""
                 break
             elif [ -n "$input" ]; then
                 echo ""
-                echo "❌ Invalid choice. Please enter 1, 2, or 3."
+                echo "❌ Invalid choice. Please enter 1, 2, 3 or 4."
                 echo ""
             fi
         fi
@@ -66,6 +66,10 @@ select_project_folder() {
         3)
             PROJECT_FOLDER="capClone2"
             echo "✅ Selected: capClone2"
+            ;;
+        4)
+            PROJECT_FOLDER="capCloneDev"
+            echo "✅ Selected: capCloneDev"
             ;;
     esac
     echo ""
@@ -143,60 +147,37 @@ start_service_tab() {
     echo "🔄 Starting $service_name in new tab..."
     
     if command -v gnome-terminal >/dev/null 2>&1; then
-        gnome-terminal --tab --title="$service_name ($PROJECT_FOLDER)" -- bash -c "
-            # Setup Node.js environment for this session
-            $(declare -f setup_node_env)
-            setup_node_env
-            
-            # Change to project directory
-            cd \"$path\" || { echo '❌ Failed to change directory to $path'; exit 1; }
-            
-            echo ''
-            echo '🚀 Starting $service_name...'
-            echo '💡 Press Ctrl+C to stop this service'
-            echo '----------------------------------------'
-            
-            # Function to handle cleanup
-            cleanup_service() {
-                echo ''
-                echo '⏹️  Stopping $service_name...'
-                # Kill the npm process group if it exists
-                if [ ! -z \"\$npm_pid\" ]; then
-                    # Kill the entire process group
-                    kill -TERM -\$npm_pid 2>/dev/null || true
-                    wait \$npm_pid 2>/dev/null || true
-                fi
-                echo '✅ Service stopped.'
-            }
-            
-            # Function to handle Ctrl+C
-            handle_sigint() {
-                cleanup_service
-                echo '💡 Terminal will stay open. You can close it or run other commands.'
-                # Start a new bash session
-                exec bash
-            }
-            
-            # Set trap for Ctrl+C
-            trap handle_sigint SIGINT
-            
-            # Make the current shell the leader of a new process group
-            # This ensures the terminal recognizes running processes
-            set -m
-            
-            # Run the npm command in foreground (not background)
-            # This ensures output is visible and terminal warnings work
-            $command &
-            npm_pid=\$!
-            
-            # Bring it to foreground so terminal recognizes it
-            fg %1
-            
-            # If we reach here, the process ended normally
-            echo ''
-            echo '⏹️  Service ended normally. Terminal will stay open...'
-            exec bash
-        " &
+        # Create a wrapper script for each service to ensure proper process handling
+        local script_path="/tmp/${PROJECT_FOLDER}_${service_name// /_}_launcher.sh"
+        cat > "$script_path" << EOF
+#!/bin/bash
+# Setup Node.js environment
+$(declare -f setup_node_env)
+setup_node_env
+
+# Change to project directory
+cd "$path" || { echo '❌ Failed to change directory to $path'; exit 1; }
+
+echo ''
+echo '🚀 Starting $service_name...'
+echo '💡 Press Ctrl+C to stop this service'
+echo '----------------------------------------'
+
+# Handle Ctrl+C
+trap 'echo -e "\n\n⏹️  Service stopped. Terminal will stay open..."; exec bash' SIGINT
+
+# Run the service
+$command
+
+# If service ends normally
+echo -e '\n⏹️  Service ended normally. Terminal will stay open...'
+exec bash
+EOF
+        
+        chmod +x "$script_path"
+        
+        # Launch terminal with the script
+        gnome-terminal --tab --title="$service_name ($PROJECT_FOLDER)" -- "$script_path" &
     else
         echo "❌ gnome-terminal not found. Using background process instead."
         cd "$path" || exit 1
@@ -214,6 +195,10 @@ cleanup() {
     echo ""
     echo "🛑 Script interrupted by Ctrl+C"
     echo "🏁 Launcher stopped, but services may still be running in other tabs"
+    
+    # Clean up temporary launcher scripts
+    rm -f /tmp/${PROJECT_FOLDER}_*_launcher.sh 2>/dev/null || true
+    
     echo "💡 Terminal will stay open..."
     exec bash
 }
@@ -255,5 +240,9 @@ echo ""
 echo "🎉 All services started successfully!"
 echo "🌐 Frontend should be available at: http://localhost:$FRONTEND_PORT"
 echo "💡 Services are running in separate tabs/windows"
+
+# Clean up temporary launcher scripts after a short delay
+(sleep 5 && rm -f /tmp/${PROJECT_FOLDER}_*_launcher.sh 2>/dev/null) &
+
 echo ""
 exec bash
