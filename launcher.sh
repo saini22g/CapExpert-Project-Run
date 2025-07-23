@@ -12,6 +12,48 @@ echo "🚀 Starting CapExpert Project..."
 # Function to display folder selection menu with timer
 select_project_folder() {
     echo ""
+    echo "📁 Opening project selection dialog..."
+    
+    # Check if zenity is available
+    if ! command -v zenity >/dev/null 2>&1; then
+        echo "⚠️  Zenity not found. Installing zenity..."
+        sudo apt-get update && sudo apt-get install -y zenity || {
+            echo "❌ Failed to install zenity. Using command-line selection."
+            select_project_folder_cli
+            return
+        }
+    fi
+    
+    # Use zenity with timeout
+    choice=$(timeout ${wait_time}s zenity --list \
+        --title="Select CapExpert Project" \
+        --text="Choose the project folder to run:\n\nWill auto-select capClone in ${wait_time} seconds" \
+        --radiolist \
+        --column="Select" \
+        --column="Project" \
+        --column="Description" \
+        --width=400 \
+        --height=300 \
+        TRUE "capClone" "Main project folder" \
+        FALSE "capClone1" "First alternative folder" \
+        FALSE "capClone2" "Second alternative folder" \
+        FALSE "capCloneDev" "Development folder" 2>/dev/null) || true
+    
+    # Check if choice is empty (timeout or cancel)
+    if [ -z "$choice" ]; then
+        echo "⏰ No selection made or dialog timed out. Defaulting to capClone."
+        PROJECT_FOLDER="capClone"
+    else
+        PROJECT_FOLDER="$choice"
+    fi
+    
+    echo "✅ Selected: $PROJECT_FOLDER"
+    echo ""
+}
+
+# Fallback CLI function if zenity is not available
+select_project_folder_cli() {
+    echo ""
     echo "📁 Please select the project folder to run:"
     echo "1) capClone"
     echo "2) capClone1" 
