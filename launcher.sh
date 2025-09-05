@@ -128,7 +128,7 @@ FRONTEND_DIR="/var/www/html/$PROJECT_FOLDER/capExpertApp"
 PRIMARY_API_PORT=8080
 IMPORT_API_PORT=8081
 FRONTEND_PORT=4200
-MAX_WAIT_SECONDS=300  # 5 minutes max wait time
+MAX_WAIT_SECONDS=600  # 10 minutes max wait time
 CHECK_INTERVAL=5     # Check every 5 seconds
 
 echo "🎯 Running project from: /var/www/html/$PROJECT_FOLDER"
