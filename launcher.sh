@@ -130,6 +130,9 @@ IMPORT_API_PORT=8081
 FRONTEND_PORT=4200
 MAX_WAIT_SECONDS=600  # 10 minutes max wait time
 CHECK_INTERVAL=5     # Check every 5 seconds
+# Ngrok configuration
+NGROK_PORT=8081
+NGROK_SERVICE_NAME="Ngrok (Import API tunnel)"
 
 echo "🎯 Running project from: /var/www/html/$PROJECT_FOLDER"
 echo "=================================================="
@@ -233,6 +236,49 @@ EOF
     sleep 1
 }
 
+# Function to start ngrok tunnel
+start_ngrok_tab() {
+    local port=$1
+    local service_name=$2
+    
+    echo "🌐 Starting ngrok tunnel for port $port in new tab..."
+    
+    if command -v gnome-terminal >/dev/null 2>&1; then
+        local script_path="/tmp/${PROJECT_FOLDER}_${service_name// /_}_launcher.sh"
+        cat > "$script_path" << EOF
+#!/bin/bash
+# Minimal environment for ngrok (usually doesn't need nvm)
+
+cd "$HOME" || cd /tmp  # ngrok doesn't care about directory
+
+echo ''
+echo '🌐 Starting ngrok tunnel for http://localhost:$port'
+echo '💡 Press Ctrl+C to stop ngrok'
+echo '----------------------------------------'
+
+# Handle Ctrl+C
+trap 'echo -e "\n\n⏹️  ngrok stopped. Terminal will stay open..."; exec bash' SIGINT
+
+# Run ngrok (add --log=stdout if you want cleaner output)
+ngrok http --domain=finch-superb-especially.ngrok-free.app $port
+
+# If ngrok ends
+echo -e '\n⏹️  ngrok ended. Terminal will stay open...'
+exec bash
+EOF
+        
+        chmod +x "$script_path"
+        gnome-terminal --tab --title="$service_name ($PROJECT_FOLDER)" -- "$script_path" &
+    else
+        echo "❌ gnome-terminal not found. Skipping ngrok in background."
+        nohup ngrok http $port > "/tmp/${PROJECT_FOLDER}_ngrok.log" 2>&1 &
+        echo "📋 ngrok logs: /tmp/${PROJECT_FOLDER}_ngrok.log"
+    fi
+    
+    echo "✅ ngrok tunnel started"
+    sleep 1
+}
+
 # Main execution
 cleanup() {
     echo ""
@@ -261,6 +307,12 @@ echo ""
 echo "⏳ Waiting for both backend services to start..."
 echo "   (This may take a few minutes)"
 
+# ──────────────── Add here ────────────────
+echo ""
+echo "🌐 Starting public tunnel for Import API (port $NGROK_PORT)..."
+start_ngrok_tab "$NGROK_PORT" "$NGROK_SERVICE_NAME" || true
+# ──────────────────────────────────────────
+
 check_service $PRIMARY_API_PORT "Primary API" || {
     echo "❌ Primary API failed to start. Frontend will not start."
     exec bash
@@ -279,10 +331,9 @@ start_service_tab "$FRONTEND_DIR" "npm run start:dev" "Frontend"
 # Verify frontend started (non-blocking)
 check_service $FRONTEND_PORT "Frontend" || true
 
-echo ""
-echo "🎉 All services started successfully!"
-echo "🌐 Frontend should be available at: http://localhost:$FRONTEND_PORT"
-echo "💡 Services are running in separate tabs/windows"
+echo "🌐 Frontend should be available at:           http://localhost:$FRONTEND_PORT"
+echo "🌐 Import API public URL:                    https://xxxx.ngrok-free.app  ← check ngrok tab"
+echo "   (Primary API usually stays internal only)"
 
 # Clean up temporary launcher scripts after a short delay
 (sleep 5 && rm -f /tmp/${PROJECT_FOLDER}_*_launcher.sh 2>/dev/null) &
