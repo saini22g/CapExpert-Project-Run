@@ -332,7 +332,7 @@ start_service_tab "$FRONTEND_DIR" "npm run start:dev" "Frontend"
 check_service $FRONTEND_PORT "Frontend" || true
 
 echo "🌐 Frontend should be available at:           http://localhost:$FRONTEND_PORT"
-echo "🌐 Import API public URL:                    https://xxxx.ngrok-free.app  ← check ngrok tab"
+echo "🌐 Import API public URL:                    https://finch-superb-especially.ngrok-free.app  ← check ngrok tab"
 echo "   (Primary API usually stays internal only)"
 
 # Clean up temporary launcher scripts after a short delay
