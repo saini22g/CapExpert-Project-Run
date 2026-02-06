@@ -98,23 +98,12 @@ select_project_folder_cli() {
     done
     
     case $choice in
-        1)
-            PROJECT_FOLDER="capClone"
-            echo "✅ Selected: capClone"
-            ;;
-        2)
-            PROJECT_FOLDER="capClone1"
-            echo "✅ Selected: capClone1"
-            ;;
-        3)
-            PROJECT_FOLDER="capClone2"
-            echo "✅ Selected: capClone2"
-            ;;
-        4)
-            PROJECT_FOLDER="capCloneDev"
-            echo "✅ Selected: capCloneDev"
-            ;;
+        1) PROJECT_FOLDER="capClone" ;;
+        2) PROJECT_FOLDER="capClone1" ;;
+        3) PROJECT_FOLDER="capClone2" ;;
+        4) PROJECT_FOLDER="capCloneDev" ;;
     esac
+    echo "✅ Selected: $PROJECT_FOLDER"
     echo ""
 }
 
