@@ -32,8 +32,8 @@ select_project_folder() {
         --column="Select" \
         --column="Project" \
         --column="Description" \
-        --width=400 \
-        --height=300 \
+        --width=750 \
+        --height=500 \
         TRUE "capClone" "Main project folder" \
         FALSE "capClone1" "First alternative folder" \
         FALSE "capClone2" "Second alternative folder" \
@@ -138,7 +138,7 @@ setup_node_env() {
     
     # Use Node.js v20.11.1 specifically
     if command -v nvm >/dev/null 2>&1; then
-        nvm use 20.11.1 2>/dev/null
+        nvm use 20.19 2>/dev/null
         echo "✅ Using Node.js version: $(node --version)"
     else
         echo "⚠️  NVM not found, using system Node.js: $(node --version)"
