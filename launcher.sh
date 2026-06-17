@@ -119,9 +119,17 @@ IMPORT_API_PORT=8081
 FRONTEND_PORT=4200
 MAX_WAIT_SECONDS=600  # 10 minutes max wait time
 CHECK_INTERVAL=5     # Check every 5 seconds
-# Ngrok configuration
-NGROK_PORT=8081
-NGROK_SERVICE_NAME="Ngrok (Import API tunnel)"
+# Ngrok tunnels — each maps a backend port to a reserved free domain via a per-account alias from
+# ~/.bashrc (ngrok1 = Import API → finch, ngrok2 = Primary API → giraffe). Run via `bash -ic` so the
+# interactive-only aliases resolve, exactly as when run by hand.
+NGROK_IMPORT_NAME="Ngrok1 (Import API)"
+NGROK_IMPORT_CMD="bash -ic 'ngrok1 $IMPORT_API_PORT'"
+NGROK_PRIMARY_NAME="Ngrok2 (Primary API)"
+NGROK_PRIMARY_CMD="bash -ic 'ngrok2 $PRIMARY_API_PORT'"
+# Dummy matching service — started by this launcher via its own run.sh (not a selectable option).
+MATCHING_DIR="/var/www/html/$PROJECT_FOLDER/matching-api"
+MATCHING_PORT=8083
+MATCHING_SERVICE_NAME="Dummy Matching"
 
 echo "🎯 Running project from: /var/www/html/$PROJECT_FOLDER"
 echo "=================================================="
@@ -225,13 +233,14 @@ EOF
     sleep 1
 }
 
-# Function to start ngrok tunnel
+# Function to start an ngrok tunnel in a new tab.
+# Usage: start_ngrok_tab <service_name> <full ngrok command string>
 start_ngrok_tab() {
-    local port=$1
-    local service_name=$2
-    
-    echo "🌐 Starting ngrok tunnel for port $port in new tab..."
-    
+    local service_name=$1
+    local ngrok_command=$2
+
+    echo "🌐 Starting $service_name in new tab..."
+
     if command -v gnome-terminal >/dev/null 2>&1; then
         local script_path="/tmp/${PROJECT_FOLDER}_${service_name// /_}_launcher.sh"
         cat > "$script_path" << EOF
@@ -241,31 +250,74 @@ start_ngrok_tab() {
 cd "$HOME" || cd /tmp  # ngrok doesn't care about directory
 
 echo ''
-echo '🌐 Starting ngrok tunnel for http://localhost:$port'
+echo '🌐 Starting $service_name'
+echo "   \$ $ngrok_command"
 echo '💡 Press Ctrl+C to stop ngrok'
 echo '----------------------------------------'
 
 # Handle Ctrl+C
 trap 'echo -e "\n\n⏹️  ngrok stopped. Terminal will stay open..."; exec bash' SIGINT
 
-# Run ngrok (add --log=stdout if you want cleaner output)
-ngrok http --domain=finch-superb-especially.ngrok-free.app $port
+# Run ngrok
+$ngrok_command
 
 # If ngrok ends
 echo -e '\n⏹️  ngrok ended. Terminal will stay open...'
 exec bash
 EOF
-        
+
         chmod +x "$script_path"
         gnome-terminal --tab --title="$service_name ($PROJECT_FOLDER)" -- "$script_path" &
     else
-        echo "❌ gnome-terminal not found. Skipping ngrok in background."
-        nohup ngrok http $port > "/tmp/${PROJECT_FOLDER}_ngrok.log" 2>&1 &
-        echo "📋 ngrok logs: /tmp/${PROJECT_FOLDER}_ngrok.log"
+        echo "❌ gnome-terminal not found. Running $service_name in background."
+        nohup bash -c "$ngrok_command" > "/tmp/${PROJECT_FOLDER}_${service_name// /_}.log" 2>&1 &
+        echo "📋 logs: /tmp/${PROJECT_FOLDER}_${service_name// /_}.log"
     fi
-    
-    echo "✅ ngrok tunnel started"
+
+    echo "✅ $service_name started"
     sleep 1
+}
+
+# Ask ONCE (single checklist) which optional services to start. All OFF by default; auto-continues
+# with NONE selected after $wait_time seconds. Sets RUN_NGROK_PRIMARY, RUN_NGROK_IMPORT, RUN_MATCHING.
+select_optional_services() {
+    RUN_NGROK_PRIMARY=no
+    RUN_NGROK_IMPORT=no
+    RUN_MATCHING=no
+    local matching_available=no
+    [ -f "$MATCHING_DIR/run.sh" ] && matching_available=yes
+
+    if command -v zenity >/dev/null 2>&1; then
+        local rows=(
+            FALSE "primary" "Primary API ngrok (ngrok2 → giraffe, $PRIMARY_API_PORT)"
+            FALSE "import"  "Import API ngrok (ngrok1 → finch, $IMPORT_API_PORT)"
+        )
+        [ "$matching_available" = yes ] && rows+=( FALSE "matching" "Dummy matching API (run.sh, port $MATCHING_PORT)" )
+        local choice=""
+        choice=$(timeout ${wait_time}s zenity --list --checklist \
+            --title="CapExpert — services to run" \
+            --text="Tick services to start (default: none)" \
+            --column="Run" --column="Service" --column="Description" \
+            --width=520 --height=340 \
+            "${rows[@]}" 2>/dev/null) || true   # cancel/timeout → empty → none
+        case "$choice" in *primary*)  RUN_NGROK_PRIMARY=yes;; esac
+        case "$choice" in *import*)   RUN_NGROK_IMPORT=yes;;  esac
+        case "$choice" in *matching*) RUN_MATCHING=yes;;      esac
+    else
+        echo ""
+        echo "🧩 Optional services (default: NONE):"
+        echo "   1) Primary API ngrok (ngrok2 $PRIMARY_API_PORT)"
+        echo "   2) Import API ngrok  (ngrok1 $IMPORT_API_PORT)"
+        [ "$matching_available" = yes ] && echo "   3) Dummy matching API (run.sh $MATCHING_PORT)"
+        local sel=""
+        read -t ${wait_time} -p "Enter numbers to ENABLE (e.g. '1 2 3', blank = none): " sel || { echo ""; sel=""; }
+        case " $sel " in *" 1 "*) RUN_NGROK_PRIMARY=yes;; esac
+        case " $sel " in *" 2 "*) RUN_NGROK_IMPORT=yes;;  esac
+        [ "$matching_available" = yes ] && case " $sel " in *" 3 "*) RUN_MATCHING=yes;; esac
+    fi
+
+    [ "$matching_available" = no ] && echo "ℹ️  No matching-api/run.sh in $PROJECT_FOLDER — dummy matching unavailable."
+    echo "🧩 Selected →  Primary ngrok: $RUN_NGROK_PRIMARY  |  Import ngrok: $RUN_NGROK_IMPORT  |  Dummy matching: $RUN_MATCHING"
 }
 
 # Main execution
@@ -286,6 +338,9 @@ trap cleanup SIGINT SIGTERM
 echo "🚀 Starting $PROJECT_FOLDER services with Node.js v20.11.1"
 echo "=================================================="
 
+# ── Pick optional services in ONE checklist (all OFF by default) ──
+select_optional_services
+
 # Start both backends in parallel
 echo "⚡ Starting backend services in parallel..."
 start_service_tab "$PRIMARY_API_DIR" "npm run start:dev" "Primary API" &
@@ -296,11 +351,28 @@ echo ""
 echo "⏳ Waiting for both backend services to start..."
 echo "   (This may take a few minutes)"
 
-# ──────────────── Add here ────────────────
-echo ""
-echo "🌐 Starting public tunnel for Import API (port $NGROK_PORT)..."
-start_ngrok_tab "$NGROK_PORT" "$NGROK_SERVICE_NAME" || true
-# ──────────────────────────────────────────
+# ──────────────── ngrok tunnels (per selection) ────────────────
+if [ "$RUN_NGROK_PRIMARY" = "yes" ]; then
+    echo ""
+    echo "🌐 Starting public tunnel for Primary API (port $PRIMARY_API_PORT)..."
+    start_ngrok_tab "$NGROK_PRIMARY_NAME" "$NGROK_PRIMARY_CMD" || true
+fi
+if [ "$RUN_NGROK_IMPORT" = "yes" ]; then
+    echo ""
+    echo "🌐 Starting public tunnel for Import API (port $IMPORT_API_PORT)..."
+    start_ngrok_tab "$NGROK_IMPORT_NAME" "$NGROK_IMPORT_CMD" || true
+fi
+# ─────────────────────────────────────────────────────────────────
+
+# ── Dummy matching service (per selection) — started EARLY via its own run.sh, in parallel with the
+#    backends. It connects to the DB directly at boot (the APIs need not be up first); its only tie to
+#    importAPI is the /capture-webhook/copilot-match callback, which fires later when a match request
+#    arrives. run.sh links node_modules to this folder's importAPI and loads its .env. ──
+if [ "$RUN_MATCHING" = "yes" ] && [ -f "$MATCHING_DIR/run.sh" ]; then
+    echo ""
+    echo "🔌 Starting dummy matching service (matching-api on port $MATCHING_PORT) via run.sh..."
+    start_service_tab "$MATCHING_DIR" "bash run.sh" "$MATCHING_SERVICE_NAME"
+fi
 
 check_service $PRIMARY_API_PORT "Primary API" || {
     echo "❌ Primary API failed to start. Frontend will not start."
@@ -321,8 +393,16 @@ start_service_tab "$FRONTEND_DIR" "npm run start:dev" "Frontend"
 check_service $FRONTEND_PORT "Frontend" || true
 
 echo "🌐 Frontend should be available at:           http://localhost:$FRONTEND_PORT"
-echo "🌐 Import API public URL:                    https://finch-superb-especially.ngrok-free.app  ← check ngrok tab"
-echo "   (Primary API usually stays internal only)"
+if [ "$RUN_NGROK_IMPORT" = "yes" ]; then
+    echo "🌐 Import API public URL:                    https://finch-superb-especially.ngrok-free.app  ← check Ngrok1 tab"
+fi
+if [ "$RUN_NGROK_PRIMARY" = "yes" ]; then
+    echo "🌐 Primary API public URL:                   https://giraffe-balanced-panda.ngrok-free.app  ← check Ngrok2 tab"
+fi
+if [ "$RUN_MATCHING" = "yes" ] && [ -f "$MATCHING_DIR/run.sh" ]; then
+    echo "🔌 Dummy matching service:                   http://localhost:$MATCHING_PORT/api/copilot-matching  ← check Dummy Matching tab"
+    echo "   (point importAPI DENOVO_API_URL at it: DENOVO_API_URL=http://localhost:$MATCHING_PORT)"
+fi
 
 # Clean up temporary launcher scripts after a short delay
 (sleep 5 && rm -f /tmp/${PROJECT_FOLDER}_*_launcher.sh 2>/dev/null) &
