@@ -107,13 +107,75 @@ select_project_folder_cli() {
     echo ""
 }
 
-# Call the selection function
+# Function to choose between the split backends and the merged capExpertAPI.
+# Only asked when the selected folder actually ships capExpertAPI; otherwise the
+# split primaryAPI/importAPI pair is the only thing that can run.
+select_backend_mode() {
+    BACKEND_MODE="split"
+
+    if [ ! -d "$PROJECT_ROOT/capExpertAPI" ]; then
+        echo "ℹ️  No capExpertAPI in $PROJECT_FOLDER — running primaryAPI + importAPI."
+        echo ""
+        return
+    fi
+
+    local choice=""
+    if command -v zenity >/dev/null 2>&1; then
+        choice=$(timeout ${wait_time}s zenity --list \
+            --title="Select backend to run" \
+            --text="How should the backends run?\n\nWill auto-select primaryAPI + importAPI in ${wait_time} seconds" \
+            --radiolist \
+            --column="Select" \
+            --column="Mode" \
+            --column="Description" \
+            --width=900 \
+            --height=420 \
+            TRUE "split" "Normal — primaryAPI + importAPI (npm run start:dev)" \
+            FALSE "merged" "Merged — capExpertAPI (start:dev:primary + start:dev:import)" 2>/dev/null) || true
+    else
+        echo ""
+        echo "🔀 Which backends should run?"
+        echo "   1) Normal — primaryAPI + importAPI"
+        echo "   2) Merged — capExpertAPI (start:dev:primary + start:dev:import)"
+        local sel=""
+        read -t ${wait_time} -p "Enter choice (1-2) [auto-selects 1 in ${wait_time}s]: " sel || { echo ""; sel=""; }
+        case "$sel" in
+            2) choice="merged" ;;
+            *) choice="split" ;;
+        esac
+    fi
+
+    # Cancel / timeout / anything unexpected falls back to the normal split pair.
+    case "$choice" in
+        merged) BACKEND_MODE="merged" ;;
+        *)      BACKEND_MODE="split" ;;
+    esac
+}
+
+# Call the selection functions
 select_project_folder
 
+PROJECT_ROOT="/var/www/html/$PROJECT_FOLDER"
+
+select_backend_mode
+
 # Configuration - dynamically set based on selection
-PRIMARY_API_DIR="/var/www/html/$PROJECT_FOLDER/primaryAPI"
-IMPORT_API_DIR="/var/www/html/$PROJECT_FOLDER/importAPI"
-FRONTEND_DIR="/var/www/html/$PROJECT_FOLDER/capExpertApp"
+if [ "$BACKEND_MODE" = "merged" ]; then
+    # One folder, two watchers: separate tsconfigs (dist-primary / dist-import)
+    # and debug ports (9229 / 9230), so both can run side by side.
+    PRIMARY_API_DIR="$PROJECT_ROOT/capExpertAPI"
+    IMPORT_API_DIR="$PROJECT_ROOT/capExpertAPI"
+    PRIMARY_API_CMD="npm run start:dev:primary"
+    IMPORT_API_CMD="npm run start:dev:import"
+    BACKEND_LABEL="capExpertAPI (merged)"
+else
+    PRIMARY_API_DIR="$PROJECT_ROOT/primaryAPI"
+    IMPORT_API_DIR="$PROJECT_ROOT/importAPI"
+    PRIMARY_API_CMD="npm run start:dev"
+    IMPORT_API_CMD="npm run start:dev"
+    BACKEND_LABEL="primaryAPI + importAPI (normal)"
+fi
+FRONTEND_DIR="$PROJECT_ROOT/capExpertApp"
 PRIMARY_API_PORT=8080
 IMPORT_API_PORT=8081
 FRONTEND_PORT=4200
@@ -127,11 +189,12 @@ NGROK_IMPORT_CMD="bash -ic 'ngrok1 $IMPORT_API_PORT'"
 NGROK_PRIMARY_NAME="Ngrok2 (Primary API)"
 NGROK_PRIMARY_CMD="bash -ic 'ngrok2 $PRIMARY_API_PORT'"
 # Dummy matching service — started by this launcher via its own run.sh (not a selectable option).
-MATCHING_DIR="/var/www/html/$PROJECT_FOLDER/matching-api"
+MATCHING_DIR="$PROJECT_ROOT/matching-api"
 MATCHING_PORT=8083
 MATCHING_SERVICE_NAME="Dummy Matching"
 
-echo "🎯 Running project from: /var/www/html/$PROJECT_FOLDER"
+echo "🎯 Running project from: $PROJECT_ROOT"
+echo "🔀 Backends: $BACKEND_LABEL"
 echo "=================================================="
 
 # Function to setup Node.js environment
@@ -338,13 +401,17 @@ trap cleanup SIGINT SIGTERM
 echo "🚀 Starting $PROJECT_FOLDER services with Node.js v20.11.1"
 echo "=================================================="
 
+for backend_dir in "$PRIMARY_API_DIR" "$IMPORT_API_DIR"; do
+    [ -d "$backend_dir" ] || { echo "❌ Backend folder not found: $backend_dir"; exec bash; }
+done
+
 # ── Pick optional services in ONE checklist (all OFF by default) ──
 select_optional_services
 
 # Start both backends in parallel
 echo "⚡ Starting backend services in parallel..."
-start_service_tab "$PRIMARY_API_DIR" "npm run start:dev" "Primary API" &
-start_service_tab "$IMPORT_API_DIR" "npm run start:dev" "Import API" &
+start_service_tab "$PRIMARY_API_DIR" "$PRIMARY_API_CMD" "Primary API" &
+start_service_tab "$IMPORT_API_DIR" "$IMPORT_API_CMD" "Import API" &
 
 # Wait for both backends to start
 echo ""
