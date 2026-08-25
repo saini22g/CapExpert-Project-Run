@@ -3,6 +3,12 @@
 # capClone Project Launcher with Enhanced Service Management
 # Starts backends in parallel, frontend only after both backends are ready
 
+# Needs real bash (arrays, [[ ]], declare -f). On Ubuntu `sh launcher.sh` runs dash,
+# which breaks in obscure ways, so re-exec under bash instead.
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
+
 set -e
 
 wait_time=30
@@ -107,18 +113,65 @@ select_project_folder_cli() {
     echo ""
 }
 
-# Function to choose between the split backends and the merged capExpertAPI.
-# Only asked when the selected folder actually ships capExpertAPI; otherwise the
-# split primaryAPI/importAPI pair is the only thing that can run.
-select_backend_mode() {
-    BACKEND_MODE="split"
+# Works out which backend layout the selected folder actually ships.
+# Parent folders come in two shapes:
+#   • split  — primaryAPI + importAPI as separate projects
+#   • merged — one backendApi project run twice (start:dev:primary / start:dev:import)
+# A folder may ship either, or both. The merged folder is normally backendApi; capExpertAPI
+# is still accepted because older checkouts predate the rename.
+detect_backend_layout() {
+    MERGED_API_DIR=""
+    MERGED_API_NAME=""
+    for candidate in backendApi capExpertAPI; do
+        if [ -d "$PROJECT_ROOT/$candidate" ]; then
+            MERGED_API_DIR="$PROJECT_ROOT/$candidate"
+            MERGED_API_NAME="$candidate"
+            break
+        fi
+    done
 
-    if [ ! -d "$PROJECT_ROOT/capExpertAPI" ]; then
-        echo "ℹ️  No capExpertAPI in $PROJECT_FOLDER — running primaryAPI + importAPI."
+    HAS_MERGED=no
+    if [ -n "$MERGED_API_DIR" ]; then
+        HAS_MERGED=yes
+    fi
+
+    HAS_SPLIT=no
+    if [ -d "$PROJECT_ROOT/primaryAPI" ] && [ -d "$PROJECT_ROOT/importAPI" ]; then
+        HAS_SPLIT=yes
+    fi
+
+    # Must not fall out on a failed test: under `set -e` a non-zero return from this
+    # function would kill the launcher silently.
+    return 0
+}
+
+# Asks split-vs-merged ONLY when the folder ships both. With a single layout there is
+# nothing to choose, so it is selected silently.
+select_backend_mode() {
+    detect_backend_layout
+
+    if [ "$HAS_SPLIT" = no ] && [ "$HAS_MERGED" = no ]; then
+        echo "❌ No backend found in $PROJECT_ROOT"
+        echo "   (looked for primaryAPI + importAPI, backendApi, capExpertAPI)"
+        exec bash
+    fi
+
+    if [ "$HAS_MERGED" = no ]; then
+        BACKEND_MODE="split"
+        echo "ℹ️  $PROJECT_FOLDER ships primaryAPI + importAPI only — running the split pair."
         echo ""
         return
     fi
 
+    if [ "$HAS_SPLIT" = no ]; then
+        BACKEND_MODE="merged"
+        echo "ℹ️  $PROJECT_FOLDER ships $MERGED_API_NAME only — running the merged backend."
+        echo ""
+        return
+    fi
+
+    # Both layouts present — let the user pick.
+    BACKEND_MODE="split"
     local choice=""
     if command -v zenity >/dev/null 2>&1; then
         choice=$(timeout ${wait_time}s zenity --list \
@@ -131,12 +184,12 @@ select_backend_mode() {
             --width=900 \
             --height=420 \
             TRUE "split" "Normal — primaryAPI + importAPI (npm run start:dev)" \
-            FALSE "merged" "Merged — capExpertAPI (start:dev:primary + start:dev:import)" 2>/dev/null) || true
+            FALSE "merged" "Merged — $MERGED_API_NAME (start:dev:primary + start:dev:import)" 2>/dev/null) || true
     else
         echo ""
         echo "🔀 Which backends should run?"
         echo "   1) Normal — primaryAPI + importAPI"
-        echo "   2) Merged — capExpertAPI (start:dev:primary + start:dev:import)"
+        echo "   2) Merged — $MERGED_API_NAME (start:dev:primary + start:dev:import)"
         local sel=""
         read -t ${wait_time} -p "Enter choice (1-2) [auto-selects 1 in ${wait_time}s]: " sel || { echo ""; sel=""; }
         case "$sel" in
@@ -163,11 +216,11 @@ select_backend_mode
 if [ "$BACKEND_MODE" = "merged" ]; then
     # One folder, two watchers: separate tsconfigs (dist-primary / dist-import)
     # and debug ports (9229 / 9230), so both can run side by side.
-    PRIMARY_API_DIR="$PROJECT_ROOT/capExpertAPI"
-    IMPORT_API_DIR="$PROJECT_ROOT/capExpertAPI"
+    PRIMARY_API_DIR="$MERGED_API_DIR"
+    IMPORT_API_DIR="$MERGED_API_DIR"
     PRIMARY_API_CMD="npm run start:dev:primary"
     IMPORT_API_CMD="npm run start:dev:import"
-    BACKEND_LABEL="capExpertAPI (merged)"
+    BACKEND_LABEL="$MERGED_API_NAME (merged)"
 else
     PRIMARY_API_DIR="$PROJECT_ROOT/primaryAPI"
     IMPORT_API_DIR="$PROJECT_ROOT/importAPI"
@@ -347,8 +400,13 @@ select_optional_services() {
     RUN_NGROK_PRIMARY=no
     RUN_NGROK_IMPORT=no
     RUN_MATCHING=no
+    # The dummy matching service is only offered when the folder actually ships it;
+    # without run.sh there is nothing to start, so it is left out of the prompt entirely.
     local matching_available=no
     [ -f "$MATCHING_DIR/run.sh" ] && matching_available=yes
+    if [ "$matching_available" = no ]; then
+        echo "ℹ️  No matching-api/run.sh in $PROJECT_FOLDER — dummy matching not offered."
+    fi
 
     if command -v zenity >/dev/null 2>&1; then
         local rows=(
@@ -379,8 +437,9 @@ select_optional_services() {
         [ "$matching_available" = yes ] && case " $sel " in *" 3 "*) RUN_MATCHING=yes;; esac
     fi
 
-    [ "$matching_available" = no ] && echo "ℹ️  No matching-api/run.sh in $PROJECT_FOLDER — dummy matching unavailable."
-    echo "🧩 Selected →  Primary ngrok: $RUN_NGROK_PRIMARY  |  Import ngrok: $RUN_NGROK_IMPORT  |  Dummy matching: $RUN_MATCHING"
+    local summary="🧩 Selected →  Primary ngrok: $RUN_NGROK_PRIMARY  |  Import ngrok: $RUN_NGROK_IMPORT"
+    [ "$matching_available" = yes ] && summary="$summary  |  Dummy matching: $RUN_MATCHING"
+    echo "$summary"
 }
 
 # Main execution

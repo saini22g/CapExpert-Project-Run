@@ -16,7 +16,7 @@ CapExpert/
 ## ✨ Features
 
 - 🎯 **Project Selection**: Choose between capClone, capClone1, capClone2 or capCloneDev at runtime
-- 🔀 **Backend Mode Selection**: Run the normal `primaryAPI` + `importAPI` pair, or the merged `capExpertAPI`
+- 🔀 **Backend Layout Detection**: Detects whether the folder ships the split `primaryAPI` + `importAPI` pair, the merged `backendApi`, or both — and only asks when there is a real choice
 - 🚀 **Smart Startup Sequencing**: APIs start first, frontend waits until ready
 - 🔍 **Port Monitoring**: Checks actual port availability before proceeding
 - 🎨 **Multi-Tab Operation**: Each service runs in its own terminal tab
@@ -36,21 +36,32 @@ The launcher supports four project folders:
 - **capCloneDev**: `/var/www/html/capCloneDev/`
 
 ### Backend Modes
-After the project folder is picked, the launcher asks how the backends should run:
+Parent project folders come in two shapes, so after the folder is picked the launcher
+inspects it and decides how the backends should run:
 
 | Mode | Folder | Primary API (8080) | Import API (8081) |
 |---|---|---|---|
-| **Normal** (default) | `primaryAPI` + `importAPI` | `npm run start:dev` | `npm run start:dev` |
-| **Merged** | `capExpertAPI` | `npm run start:dev:primary` | `npm run start:dev:import` |
+| **Normal** (split) | `primaryAPI` + `importAPI` | `npm run start:dev` | `npm run start:dev` |
+| **Merged** | `backendApi` | `npm run start:dev:primary` | `npm run start:dev:import` |
 
 In Merged mode both watchers live in one folder but use separate build outputs
 (`dist-primary` / `dist-import`) and debug ports (9229 / 9230), so they run side
 by side without clashing.
 
-The question is skipped — and Normal used — when the selected folder has no
-`capExpertAPI`. Cancelling the dialog, or letting it time out, also falls back to
-Normal. Everything downstream (ngrok tunnels, the dummy matching service, the
-frontend) is unaffected by the choice.
+**The mode is only asked when the folder ships both layouts.** With a single layout
+there is nothing to choose, so it is selected silently:
+
+| Folder contains | Result |
+|---|---|
+| `primaryAPI` + `importAPI` only | Normal — no prompt |
+| `backendApi` only | Merged — no prompt |
+| Both | Prompt, defaulting to Normal |
+| Neither | Error, launcher stops |
+
+`capExpertAPI` is still accepted as a merged-folder name for checkouts that predate
+the rename to `backendApi`. When the prompt does appear, cancelling it or letting it
+time out falls back to Normal. Everything downstream (ngrok tunnels, the dummy
+matching service, the frontend) is unaffected by the choice.
 
 ### Service Ports
 - **Primary API Port**: 8080
@@ -62,8 +73,15 @@ frontend) is unaffected by the choice.
 /var/www/html/[PROJECT_FOLDER]/
 ├── primaryAPI/                    # Backend primary service   (Normal mode)
 ├── importAPI/                     # Backend import service    (Normal mode)
-├── capExpertAPI/                  # Merged backend, optional  (Merged mode)
+├── backendApi/                    # Merged backend            (Merged mode)
+├── matching-api/                  # Dummy matching service, optional
+├── dbMigrations/                  # Sequelize migrations, not started by the launcher
 └── capExpertApp/                  # Frontend application
+```
+
+At least one backend layout must be present: either `primaryAPI` + `importAPI`, or
+`backendApi`. Folders may ship both.
+```
 ```
 
 ## 🚀 Quick Setup
@@ -104,9 +122,10 @@ The setup script will:
    - Interactive menu to choose between capClone, capClone1, capClone2 or capCloneDev
    - Dynamic path configuration based on selection
 
-2. **Backend Mode Selection**:
-   - Asks whether to run the normal `primaryAPI` + `importAPI` pair or the merged `capExpertAPI`
-   - Only shown when the selected folder contains `capExpertAPI`; defaults to Normal
+2. **Backend Layout Detection**:
+   - Detects which backends the folder ships: `primaryAPI` + `importAPI`, `backendApi`, or both
+   - Asks Normal vs Merged only when both are present; otherwise picks the available one silently
+   - Stops with an error if the folder has no backend at all
 
 3. **Node.js Environment Setup**:
    - Automatically loads NVM and sets Node.js v20.11.1
@@ -157,8 +176,8 @@ Paths and start commands are set per backend mode, in the
 
 ```bash
 if [ "$BACKEND_MODE" = "merged" ]; then
-    PRIMARY_API_DIR="$PROJECT_ROOT/capExpertAPI"
-    IMPORT_API_DIR="$PROJECT_ROOT/capExpertAPI"
+    PRIMARY_API_DIR="$MERGED_API_DIR"
+    IMPORT_API_DIR="$MERGED_API_DIR"
     PRIMARY_API_CMD="npm run start:dev:primary"
     IMPORT_API_CMD="npm run start:dev:import"
 else
