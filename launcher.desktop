@@ -2,7 +2,7 @@
 Version=1.0
 Type=Application
 Name=CapExpert
-Comment=Launch CapExpert Project with primaryAPI, importAPI, and Frontend
+Comment=Start CapExpert's Primary API, Import API, frontend and services
 Exec="/var/www/html/own_project/CapExpert/launcher.sh"
 Icon=/var/www/html/own_project/CapExpert/logo-small.svg
 Terminal=true

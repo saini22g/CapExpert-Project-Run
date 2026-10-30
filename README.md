@@ -9,22 +9,24 @@ CapExpert/
 ├── launcher.sh                    # Main launcher script with project selection
 ├── launcher.desktop               # Ubuntu desktop entry
 ├── setup-launcher.sh              # Installation script
+├── services-dialog.py             # Start window: folder, run.sh or Docker, services (Cancel / Restart / Start)
 ├── logo-small.svg                 # Application icon
 └── README.md                      # This file
 ```
 
 ## ✨ Features
 
-- 🎯 **Project Selection**: Choose between capClone, capClone1, capClone2 or capCloneDev at runtime
-- 🔀 **Backend Layout Detection**: Detects whether the folder ships the split `primaryAPI` + `importAPI` pair, the merged `backendApi`, or both — and only asks when there is a real choice
-- 🚀 **Smart Startup Sequencing**: APIs start first, frontend waits until ready
-- 🔍 **Port Monitoring**: Checks actual port availability before proceeding
-- 🎨 **Multi-Tab Operation**: Each service runs in its own terminal tab
+- 🎯 **One Start Window**: Pick capClone, capClone1, capClone2 or capCloneDev, run.sh or Docker, and what to start — Primary API, Import API, capExpertApp, Capture / Sticker / CAD, both ngrok tunnels — with **Start**, **Restart** and **Cancel**
+- 🐳 **run.sh or Docker**: The web stack runs as dev watchers through `run.sh`, or as production containers through `docker-run.sh`
+- 🔗 **Shared Run Scripts**: `run.sh`, `docker-run.sh` and `wr.sh` live once in `/var/www/html/CapExpert_run` and are linked into every folder
+- 🚀 **Smart Startup Sequencing**: run.sh / docker-run.sh start the APIs first; the frontend waits for them
+- 🔍 **Port Monitoring**: Reports whether each ticked web service came up on its port
+- 🎨 **Multi-Tab Operation**: Each service's log is followed in a tab; run.sh, docker-run.sh and wr.sh each open their own window
 - 📱 **Ubuntu Integration**: Launcher appears in Applications menu
 - 🖥️ **Desktop Shortcuts**: Icon created directly on your desktop
 - ⚡ **Parallel Backend Startup**: Both APIs start simultaneously for faster launch
 - 🔄 **Enhanced Error Handling**: Comprehensive service monitoring and feedback
-- 🛠️ **Node.js Environment Management**: Automatically sets up Node.js v20.11.1
+- 🛠️ **Node.js Environment Management**: Automatically sets up Node.js v20.19
 
 ## 🏗️ Project Configuration
 
@@ -35,33 +37,81 @@ The launcher supports four project folders:
 - **capClone2**: `/var/www/html/capClone2/`
 - **capCloneDev**: `/var/www/html/capCloneDev/`
 
-### Backend Modes
-Parent project folders come in two shapes, so after the folder is picked the launcher
-inspects it and decides how the backends should run:
+### Start Window
+One window picks everything: the folder, how the web stack runs, and the services to start.
+Primary API, Import API and the frontend are ticked, and the line above the buttons says what
+**Start** will do. Nothing starts on its own: the window waits for one of its buttons:
 
-| Mode | Folder | Primary API (8080) | Import API (8081) |
-|---|---|---|---|
-| **Normal** (split) | `primaryAPI` + `importAPI` | `npm run start:dev` | `npm run start:dev` |
-| **Merged** | `backendApi` | `npm run start:dev:primary` | `npm run start:dev:import` |
-
-In Merged mode both watchers live in one folder but use separate build outputs
-(`dist-primary` / `dist-import`) and debug ports (9229 / 9230), so they run side
-by side without clashing.
-
-**The mode is only asked when the folder ships both layouts.** With a single layout
-there is nothing to choose, so it is selected silently:
-
-| Folder contains | Result |
+| Button | Does |
 |---|---|
-| `primaryAPI` + `importAPI` only | Normal — no prompt |
-| `backendApi` only | Merged — no prompt |
-| Both | Prompt, defaulting to Normal |
-| Neither | Error, launcher stops |
+| **Start** | Starts the ticked services; one that is already running is left alone (Docker: rebuilt and replaced) |
+| **Restart** | Stops what is already running for the ticked services first, then starts them fresh (hard reload, `h`) |
+| **Cancel** (or Esc) | Starts nothing |
 
-`capExpertAPI` is still accepted as a merged-folder name for checkouts that predate
-the rename to `backendApi`. When the prompt does appear, cancelling it or letting it
-time out falls back to Normal. Everything downstream (ngrok tunnels, the dummy
-matching service, the frontend) is unaffected by the choice.
+Start and Restart stay greyed out while nothing is ticked, or when the folder has no `backendApi`
+or `dbMigrations`.
+
+| Service | Port | Started by |
+|---|---|---|
+| Primary API / Import API / Frontend | 8080 / 8081 / 4200 | `run.sh`, or `docker-run.sh` when **Runs with** is Docker |
+| Capture (API + worker) | 8087 / 8088 | `wr.sh` |
+| Sticker (API + worker) | 8083 / 8084 | `wr.sh` |
+| CAD (API + worker) | 8085 / 8086 | `wr.sh` |
+| Primary API tunnel (ngrok2) / Import API tunnel (ngrok1) | — | launcher tab |
+
+Restart is passed to `run.sh` / `docker-run.sh` / `wr.sh` as `h`; the ngrok tunnels are not covered.
+
+The window is `services-dialog.py` (GTK 4 / libadwaita, the same toolkit zenity 4 draws with).
+When it cannot open (no display, no bindings), the launcher falls back to the zenity folder list
+and a zenity checklist, or numbered prompts, with Docker and Restart as the last rows.
+
+### Shared Run Scripts (`/var/www/html/CapExpert_run`)
+`run.sh` (web / mobile stack, dev watchers), `docker-run.sh` (web stack in Docker) and `wr.sh`
+(Python extraction services) exist once, in `/var/www/html/CapExpert_run`, and each folder links
+them:
+
+```
+/var/www/html/capClone1/run.sh        -> /var/www/html/CapExpert_run/run.sh
+/var/www/html/capClone1/docker-run.sh -> /var/www/html/CapExpert_run/docker-run.sh
+/var/www/html/capClone1/wr.sh         -> /var/www/html/CapExpert_run/wr.sh
+```
+
+They always run the folder they are run from — run inside capClone1, they start capClone1:
+
+1. **The CapExpert launcher** — runs them from the folder picked in the dialog.
+2. **From the clone folder** — `cd /var/www/html/capClone2 && ./run.sh` (or `./wr.sh e`).
+3. **From inside a project folder** — e.g. in `capClone2/backendApi`, `../run.sh primary` or
+   `/var/www/html/CapExpert_run/run.sh primary`: the nearest folder above that has `backendApi`
+   and `dbMigrations` is used.
+
+`run.sh` takes `w` (web, default), `m` (mobile), `a` (all), single services (`primary`, `import`,
+`fe`, `mobile-api`, `mobile-fe`) and `h`; logs go to `/var/www/html/.run/`, one folder shared by
+every workspace. `docker-run.sh` takes `primary`, `import`, `fe`, `h`, `nb`, `stop` and `db`; its logs
+are `docker-<name>.log` in the same folder. `wr.sh` takes `c`, `s`, `e`, full service names and `h`.
+See the header comment of each script for details.
+
+### run.sh or Docker
+The **Runs with** switch in the Web group decides how Primary API, Import API and the frontend
+run. The Python services (always `wr.sh`) and the ngrok tunnels are not affected.
+
+| | run.sh (default) | Docker |
+|---|---|---|
+| What runs | `nest start --watch` and `ng serve`, live reload | Production images under pm2, and the frontend's production build behind nginx, built from a snapshot of the folder |
+| Node | nvm 20.19 | 24.22.1, inside the images |
+| sudo | No | Asks for the password once, in the launcher's terminal |
+| **Start** when already running | Leaves it alone | Rebuilds and replaces its containers; stops with "port in use" when `run.sh` holds the port |
+| **Restart** | Stops the ticked services, then starts them | Stops the `run.sh` services on those ports, then builds and starts |
+| Logs, in `/var/www/html/.run/` | `<name>.log` | `docker-<name>.log`, plus `docker-fe-build.log` |
+| Code edits | Picked up live | Need another Start |
+| Frontend | http://localhost:4200 | http://localhost:4200 only (nginx answers `localhost` alone) |
+
+`run.sh` cannot see or stop the Docker containers (they run as root). To go back from Docker to
+run.sh, pick run.sh and **Restart**: a ticked port held that way is freed with
+`docker-run.sh stop` first, which asks for sudo (and, for the frontend, to reload the page in each
+open browser).
+
+All four folders share these ports, so switching folders also needs **Restart**: a plain Start
+sees the port in use and leaves the other folder's service running.
 
 ### Service Ports
 - **Primary API Port**: 8080
@@ -71,18 +121,13 @@ matching service, the frontend) is unaffected by the choice.
 ### Required Directory Structure (for each project)
 ```
 /var/www/html/[PROJECT_FOLDER]/
-├── primaryAPI/                    # Backend primary service   (Normal mode)
-├── importAPI/                     # Backend import service    (Normal mode)
-├── backendApi/                    # Merged backend            (Merged mode)
-├── matching-api/                  # Dummy matching service, optional
+├── backendApi/                    # Primary API + Import API (one project, two roles)
 ├── dbMigrations/                  # Sequelize migrations, not started by the launcher
 └── capExpertApp/                  # Frontend application
 ```
 
-At least one backend layout must be present: either `primaryAPI` + `importAPI`, or
-`backendApi`. Folders may ship both.
-```
-```
+`run.sh`, `docker-run.sh` and `wr.sh` start only a folder that has both `backendApi` and
+`dbMigrations`.
 
 ## 🚀 Quick Setup
 
@@ -105,11 +150,11 @@ The setup script will:
 1. Open Activities (Super key)
 2. Search for "CapExpert"
 3. Click to launch
-4. Select your project folder (1-3) when prompted
+4. Pick the folder and services in the start window
 
 ### Method 2: Desktop Shortcut
 1. Double-click the "CapExpert" icon on your desktop
-2. Select your project folder when prompted
+2. Pick the folder and services in the start window
 
 ### Method 3: Direct Script Execution
 ```bash
@@ -118,36 +163,31 @@ The setup script will:
 
 ## 🔧 How It Works
 
-1. **Project Selection**:
-   - Interactive menu to choose between capClone, capClone1, capClone2 or capCloneDev
-   - Dynamic path configuration based on selection
+1. **Start Window**:
+   - One window: folder, run.sh or Docker for the web stack, the services, and Start / Restart / Cancel
+     (see *Start Window*)
+   - Waits for Start, Restart or Cancel; nothing starts on its own
 
-2. **Backend Layout Detection**:
-   - Detects which backends the folder ships: `primaryAPI` + `importAPI`, `backendApi`, or both
-   - Asks Normal vs Merged only when both are present; otherwise picks the available one silently
-   - Stops with an error if the folder has no backend at all
+2. **Workspace Check**:
+   - The folder must have `backendApi` and `dbMigrations`; otherwise the launcher stops with an error
 
-3. **Node.js Environment Setup**:
-   - Automatically loads NVM and sets Node.js v20.11.1
-   - Sources environment variables for proper operation
+3. **Services Start** (the web stack last, as a Docker build takes a while):
+   - The ticked Python services start through `/var/www/html/CapExpert_run/wr.sh` on the
+     selected folder's database
+   - The ticked ngrok tunnels start in tabs of their own
+   - The ticked Primary API / Import API / frontend start through `/var/www/html/CapExpert_run/run.sh`
+     (with nvm's Node loaded), or `docker-run.sh` with Docker, run from the selected folder, in their
+     own window
 
-4. **Backend Services Start**:
-   - Primary API and Import API launch in parallel in separate tabs
-   - Each service runs with proper Node.js environment
-
-5. **Port Monitoring**:
-   - Checks if services are running on expected ports (8080, 8081)
-   - Waits up to 5 minutes for each service with 5-second intervals
+4. **Port Monitoring**:
+   - Checks that the ticked web services come up on their ports (8080, 8081, 4200)
+   - Waits up to 10 minutes for each service with 5-second intervals
    - Provides real-time feedback on startup progress
 
-6. **Frontend Launch**:
-   - Only starts after both backend APIs are confirmed running
-   - Launches in its own terminal tab on port 4200
-
-7. **Service Management**:
-   - Each service runs in a named terminal tab
-   - Logs are displayed in real-time
-   - Services can be stopped individually with Ctrl+C
+5. **Service Management**:
+   - Each service's log is followed in a named tab of the run.sh / docker-run.sh / wr.sh window
+   - Closing a tab or Ctrl+C in it stops following the log, not the service: use **Restart** to stop
+     and start again
 
 ## ⚙️ Configuration
 
@@ -166,44 +206,32 @@ Adjust service startup timeout:
 
 ```bash
 # Around line 47-48
-MAX_WAIT_SECONDS=300  # 5 minutes max wait time
+MAX_WAIT_SECONDS=600  # 10 minutes max wait time
 CHECK_INTERVAL=5     # Check every 5 seconds
 ```
 
-### Project Path Customization
-Paths and start commands are set per backend mode, in the
-`if [ "$BACKEND_MODE" = "merged" ]` block right after the selection functions:
+### Project Folders
+The folders the start window offers are `PROJECT_FOLDERS` in `launcher.sh`; the first is selected
+(the zenity fallback keeps its own list in `select_project_folder`):
 
 ```bash
-if [ "$BACKEND_MODE" = "merged" ]; then
-    PRIMARY_API_DIR="$MERGED_API_DIR"
-    IMPORT_API_DIR="$MERGED_API_DIR"
-    PRIMARY_API_CMD="npm run start:dev:primary"
-    IMPORT_API_CMD="npm run start:dev:import"
-else
-    PRIMARY_API_DIR="$PROJECT_ROOT/primaryAPI"
-    IMPORT_API_DIR="$PROJECT_ROOT/importAPI"
-    PRIMARY_API_CMD="npm run start:dev"
-    IMPORT_API_CMD="npm run start:dev"
-fi
-FRONTEND_DIR="$PROJECT_ROOT/capExpertApp"
+PROJECT_FOLDERS=(capClone capClone1 capClone2 capCloneDev)
 ```
 
-`PROJECT_ROOT` is `/var/www/html/$PROJECT_FOLDER` and is also used for
-`MATCHING_DIR`.
+`PROJECT_ROOT` is `/var/www/html/$PROJECT_FOLDER`; the shared scripts are in `RUN_DIR`.
 
 ### Node.js Version
 Change the required Node.js version:
 
 ```bash
 # Around line 64
-nvm use 20.11.1 2>/dev/null
+nvm use 20.19 2>/dev/null
 ```
 
 ## 🛠️ Troubleshooting
 
 ### Services Not Starting
-- Verify Node.js v20.11.1 is installed via NVM
+- Verify Node.js v20.19 is installed via NVM
 - Check project paths exist and are accessible
 - Ensure dependencies are installed: `npm install` in each project directory
 - Check terminal tabs for specific error messages
@@ -221,6 +249,9 @@ sudo lsof -ti:8081 | xargs kill -9
 sudo lsof -ti:4200 | xargs kill -9
 ```
 
+A port held by Docker belongs to root and pm2 restarts the app, so killing it does not stick: run
+`./docker-run.sh stop` from a workspace folder, or **Restart** with run.sh in the start window.
+
 ### Desktop Entry Issues
 - Log out and back in to refresh applications menu
 - Manual refresh: `update-desktop-database ~/.local/share/applications`
@@ -231,9 +262,9 @@ sudo lsof -ti:4200 | xargs kill -9
 # Install NVM if not present
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
 
-# Install Node.js v20.11.1
-nvm install 20.11.1
-nvm use 20.11.1
+# Install Node.js v20.19
+nvm install 20.19
+nvm use 20.19
 ```
 
 ## 📊 Project Status Monitoring
@@ -248,13 +279,17 @@ ps aux | grep -E "node.*capClone|node.*capExpert"
 ```
 
 ### Service Logs
-- Each service runs in its own terminal tab with real-time logs
-- Background logs (if gnome-terminal unavailable): `/tmp/[PROJECT]_[SERVICE].log`
+- Each service's log is followed in its own terminal tab
+- Logs stay in `/var/www/html/.run/<service>.log` (Docker: `docker-<service>.log`), one folder shared
+  by every workspace
 
 ### Stop Services
-- Use Ctrl+C in individual terminal tabs
-- Or close the terminal tabs directly
-- For background processes: `pkill -f "node.*capClone"`
+- **Restart** in the start window stops and starts the ticked services
+- A `run.sh` service: `kill -TERM -- -$(cat /var/www/html/.run/primary.pid)` (`import`, `fe`), which ends
+  its whole process group; killing just the port holder leaves the watcher to start it again
+- Docker: `cd /var/www/html/capClone && ./docker-run.sh stop` (from any workspace folder; with the
+  frontend running it asks you to reload the page, then press Enter)
+- ngrok: Ctrl+C in its tab
 
 ## 🔄 Updates and Maintenance
 
@@ -278,8 +313,11 @@ update-desktop-database ~/.local/share/applications
 - **Ubuntu 22.04 LTS** (or compatible)
 - **gnome-terminal** (default Ubuntu terminal)
 - **NVM** (Node Version Manager)
-- **Node.js v20.11.1** (automatically managed via NVM)
+- **Node.js v20.19** (automatically managed via NVM)
 - **netstat** command (usually pre-installed)
+- **python3 with GTK 4 / libadwaita 1.4+ bindings** for the start window (Ubuntu 24.04+; older
+  systems get the zenity fallback)
+- **Docker**, only for Docker mode (`docker-run.sh` runs it with sudo)
 - Project directories properly set up with dependencies
 
 ## 🎯 Usage Tips
@@ -307,7 +345,7 @@ If you encounter issues:
 2. **Verify Paths**: Ensure all project directories exist and have proper permissions
 3. **Test Individual Services**: Try starting services manually before using the launcher
 4. **Check Dependencies**: Verify `npm install` has been run in each project directory
-5. **Node.js Version**: Confirm Node.js v20.11.1 is available via NVM
+5. **Node.js Version**: Confirm Node.js v20.19 is available via NVM
 
 ## 🎉 Success!
 
