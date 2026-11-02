@@ -26,7 +26,7 @@ CapExpert/
 - 🖥️ **Desktop Shortcuts**: Icon created directly on your desktop
 - ⚡ **Parallel Backend Startup**: Both APIs start simultaneously for faster launch
 - 🔄 **Enhanced Error Handling**: Comprehensive service monitoring and feedback
-- 🛠️ **Node.js Environment Management**: Automatically sets up Node.js v20.19
+- 🛠️ **Node.js Environment Management**: Loads nvm's default Node (v24.22.1)
 
 ## 🏗️ Project Configuration
 
@@ -39,7 +39,8 @@ The launcher supports four project folders:
 
 ### Start Window
 One window picks everything: the folder, how the web stack runs, and the services to start.
-Primary API, Import API and the frontend are ticked, and the line above the buttons says what
+The folder services were last started from is selected (capClone the first time). Primary API,
+Import API and the frontend are ticked, and the line above the buttons says what
 **Start** will do. Nothing starts on its own: the window waits for one of its buttons:
 
 | Button | Does |
@@ -99,7 +100,7 @@ run. The Python services (always `wr.sh`) and the ngrok tunnels are not affected
 | | run.sh (default) | Docker |
 |---|---|---|
 | What runs | `nest start --watch` and `ng serve`, live reload | Production images under pm2, and the frontend's production build behind nginx, built from a snapshot of the folder |
-| Node | nvm 20.19 | 24.22.1, inside the images |
+| Node | nvm default (24.22.1) | 24.22.1, inside the images |
 | sudo | No | Asks for the password once, in a password window (as the db import launcher does) |
 | **Start** when already running | Leaves it alone | Rebuilds and replaces its containers; stops with "port in use" when `run.sh` holds the port |
 | **Restart** | Stops the ticked services, then starts them | Stops the `run.sh` services on those ports, then builds and starts |
@@ -213,27 +214,32 @@ CHECK_INTERVAL=5     # Check every 5 seconds
 ```
 
 ### Project Folders
-The folders the start window offers are `PROJECT_FOLDERS` in `launcher.sh`; the first is selected
-(the zenity fallback keeps its own list in `select_project_folder`):
+The folders the start window offers are `PROJECT_FOLDERS` in `launcher.sh`. It selects the folder
+services were last started from, saved in `~/.local/state/capexpert-launcher/last-folder` on each
+Start or Restart (not Stop), or the first folder when that file is missing or names a folder no longer
+in the list. The zenity fallback keeps its own list in `select_project_folder` and always defaults to
+capClone:
 
 ```bash
 PROJECT_FOLDERS=(capClone capClone1 capClone2 capCloneDev)
+LAST_FOLDER_FILE="$HOME/.local/state/capexpert-launcher/last-folder"
 ```
 
 `PROJECT_ROOT` is `/var/www/html/$PROJECT_FOLDER`; the shared scripts are in `RUN_DIR`.
 
 ### Node.js Version
-Change the required Node.js version:
+`setup_node_env` in `launcher.sh` loads nvm's default Node before `run.sh`, which needs 24.22.1
+(backendApi's `engines`; on 20.19 `nest start` fails with `ERR_REQUIRE_CYCLE_MODULE`). To change
+it, change nvm's default rather than the launcher:
 
 ```bash
-# Around line 64
-nvm use 20.19 2>/dev/null
+nvm alias default 24.22.1
 ```
 
 ## 🛠️ Troubleshooting
 
 ### Services Not Starting
-- Verify Node.js v20.19 is installed via NVM
+- Verify nvm's default is Node.js v24.22.1: `nvm version default`
 - Check project paths exist and are accessible
 - Ensure dependencies are installed: `npm install` in each project directory
 - Check terminal tabs for specific error messages
@@ -264,9 +270,9 @@ A port held by Docker belongs to root and pm2 restarts the app, so killing it do
 # Install NVM if not present
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
 
-# Install Node.js v20.19
-nvm install 20.19
-nvm use 20.19
+# Install Node.js v24.22.1 and make it nvm's default
+nvm install 24.22.1
+nvm alias default 24.22.1
 ```
 
 ## 📊 Project Status Monitoring
@@ -320,7 +326,7 @@ update-desktop-database ~/.local/share/applications
 - **Ubuntu 22.04 LTS** (or compatible)
 - **gnome-terminal** (default Ubuntu terminal)
 - **NVM** (Node Version Manager)
-- **Node.js v20.19** (automatically managed via NVM)
+- **Node.js v24.22.1** as nvm's default (the launcher loads it)
 - **netstat** command (usually pre-installed)
 - **python3 with GTK 4 / libadwaita 1.4+ bindings** for the start window (Ubuntu 24.04+; older
   systems get the zenity fallback)
@@ -329,7 +335,7 @@ update-desktop-database ~/.local/share/applications
 
 ## 🎯 Usage Tips
 
-1. **Project Selection**: The launcher will remember your choice during the session
+1. **Project Selection**: The start window selects the folder you last started services from
 2. **Service Monitoring**: Watch the terminal output for detailed startup progress
 3. **Error Handling**: Each service tab shows specific error details
 4. **Resource Management**: Monitor system resources when running multiple services
@@ -352,7 +358,7 @@ If you encounter issues:
 2. **Verify Paths**: Ensure all project directories exist and have proper permissions
 3. **Test Individual Services**: Try starting services manually before using the launcher
 4. **Check Dependencies**: Verify `npm install` has been run in each project directory
-5. **Node.js Version**: Confirm Node.js v20.19 is available via NVM
+5. **Node.js Version**: Confirm nvm's default is Node.js v24.22.1 (`nvm version default`)
 
 ## 🎉 Success!
 

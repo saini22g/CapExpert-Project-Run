@@ -2,9 +2,10 @@
 """The launcher's start window: the project folder, run.sh or Docker for the web stack, and a check box
 per service, with Cancel, Stop all, Stop, Restart and Start.
 
-    services-dialog.py ROOT FOLDER[,FOLDER...] ENTRY [ENTRY ...]
+    services-dialog.py ROOT FOLDER[,FOLDER...] SELECTED ENTRY [ENTRY ...]
 
-FOLDERS are folder names under ROOT; the first is selected. Each ENTRY is a group heading,
+FOLDERS are folder names under ROOT. SELECTED is selected when it is one of them (the launcher passes
+the folder last started), else the first; it may be empty. Each ENTRY is a group heading,
 "#|title|description", or a service, "key|TRUE or FALSE|title|subtitle|ports". The run.sh / Docker
 switch sits in the group of the first web service (primary, import, fe). Nothing starts on its own:
 the window waits for Start, Restart, Stop, Stop all or Cancel.
@@ -38,17 +39,17 @@ LOGO_CSS = ".logo { background: white; border-radius: 6px; padding: 3px 5px; }"
 
 
 def parse(argv):
-    """ROOT FOLDERS ENTRY... as (root, folders, entries), or None when malformed."""
-    if len(argv) < 3:
+    """ROOT FOLDERS SELECTED ENTRY... as (root, folders, selected, entries), or None when malformed."""
+    if len(argv) < 4:
         return None
     folders = [f for f in argv[1].split(",") if f]
-    entries = [e.split("|") for e in argv[2:]]
+    entries = [e.split("|") for e in argv[3:]]
     for e in entries:
         if not (e[0] == "#" and len(e) == 3 or len(e) == 5 and e[1] in ("TRUE", "FALSE")):
             return None
     if not folders or not any(e[0] != "#" for e in entries):
         return None
-    return argv[0], folders, entries
+    return argv[0], folders, argv[2], entries
 
 
 def join(names):
@@ -74,7 +75,7 @@ def summary(folder, ok, ticked, docker):
     return f"Starts {'; '.join(parts)} in {folder}."
 
 
-def run(root, folders, entries):
+def run(root, folders, selected, entries):
     import gi
 
     gi.require_version("Gtk", "4.0")
@@ -94,7 +95,11 @@ def run(root, folders, entries):
     status = [1]
 
     project = Adw.PreferencesGroup()
-    folder_row = Adw.ComboRow(title="Folder", model=Gtk.StringList.new(folders))
+    folder_row = Adw.ComboRow(
+        title="Folder",
+        model=Gtk.StringList.new(folders),
+        selected=folders.index(selected) if selected in folders else 0,
+    )
     project.add(folder_row)
 
     # Radio buttons rather than a linked toggle pair: which one is picked reads at a glance.

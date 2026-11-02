@@ -120,8 +120,10 @@ select_project_folder_cli() {
 RUN_DIR="/var/www/html/CapExpert_run"
 # The start window: folder, run.sh or Docker, the services, and Cancel / Restart / Start.
 SERVICES_DIALOG="$(dirname "$(readlink -f "$0")")/services-dialog.py"
-# The folders the start window offers, under /var/www/html; the first is selected.
+# The folders the start window offers, under /var/www/html. It selects the folder services were last
+# started from (saved in LAST_FOLDER_FILE), or the first when there is none.
 PROJECT_FOLDERS=(capClone capClone1 capClone2 capCloneDev)
+LAST_FOLDER_FILE="$HOME/.local/state/capexpert-launcher/last-folder"
 PRIMARY_API_PORT=8080
 IMPORT_API_PORT=8081
 FRONTEND_PORT=4200
@@ -147,9 +149,9 @@ setup_node_env() {
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" 2>/dev/null
     [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion" 2>/dev/null
     
-    # Use Node.js v20.11.1 specifically
+    # Use nvm's default Node (v24.22.1, what backendApi's engines field requires)
     if command -v nvm >/dev/null 2>&1; then
-        nvm use 20.19 2>/dev/null
+        nvm use default 2>/dev/null
         echo "✅ Using Node.js version: $(node --version)"
     else
         echo "⚠️  NVM not found, using system Node.js: $(node --version)"
@@ -404,9 +406,10 @@ select_services() {
         "ngrok-import|FALSE|Import API tunnel|${NGROK_IMPORT_URL#https://}|$IMPORT_API_PORT"
     )
 
-    local entry key on title sub ports default="" choice="" status=0 folders
+    local entry key on title sub ports default="" choice="" status=0 folders last=""
     folders=$(IFS=,; echo "${PROJECT_FOLDERS[*]}")
-    choice=$(python3 "$SERVICES_DIALOG" /var/www/html "$folders" "${services[@]}" 2>/dev/null) || status=$?
+    last=$(cat "$LAST_FOLDER_FILE" 2>/dev/null) || true
+    choice=$(python3 "$SERVICES_DIALOG" /var/www/html "$folders" "$last" "${services[@]}" 2>/dev/null) || status=$?
 
     # 0 Start / Restart (the folder, then the keys), 1 Cancel; anything else: the window did not open.
     case "$status" in
@@ -524,6 +527,9 @@ if picked stop; then
     echo ""
     exec bash
 fi
+
+# The next start window selects this folder. A failed write only loses that default.
+mkdir -p "${LAST_FOLDER_FILE%/*}" && echo "$PROJECT_FOLDER" > "$LAST_FOLDER_FILE" || true
 
 HARD_ARG=()
 if picked hard; then
