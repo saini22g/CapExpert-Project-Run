@@ -1,0 +1,2 @@
+# Python bytecode cache, written whenever services-dialog.py is imported (e.g. to test it)
+__pycache__/
