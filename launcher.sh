@@ -229,14 +229,164 @@ EOF
     sleep 1
 }
 
+# Docker needs root on this machine. Ask for the sudo password in a window, as the db import launcher
+# does, instead of in this terminal: once sudo has it, docker-run.sh started from this terminal reuses
+# it and does not ask again. Returns 1 when the window is cancelled. Without zenity or a display,
+# docker-run.sh asks in the terminal as before.
+get_sudo_password() {
+    local password
+    sudo -n -v 2>/dev/null && return 0
+    command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 0
+    while true; do
+        password=$(zenity --password --title="🔐 Administrator Authentication" \
+            --text="Docker needs administrator privileges.\n\nPlease enter your password:" 2>/dev/null) || return 1
+        if [ -n "$password" ] && printf '%s\n' "$password" | sudo -S -p '' -v 2>/dev/null; then
+            echo "✅ Administrator authentication successful"
+            return 0
+        fi
+        zenity --error --title="Authentication Failed" --text="❌ Incorrect password. Please try again." 2>/dev/null || true
+    done
+}
+
+web_port() {
+    case "$1" in
+        primary) echo $PRIMARY_API_PORT ;;
+        import) echo $IMPORT_API_PORT ;;
+        fe) echo $FRONTEND_PORT ;;
+    esac
+}
+
+# docker-run.sh stop for those of the web services $@ whose port its containers hold. They run as root,
+# so no pid shows for their port, and run.sh can neither see nor stop them.
+stop_docker_held() {
+    local web port held=()
+    for web in "$@"; do
+        port=$(web_port "$web")
+        if ss -ltnH "sport = :$port" | grep -q . && ! ss -ltnpH "sport = :$port" | grep -q 'pid='; then
+            held+=( "$web" )
+        fi
+    done
+    [ ${#held[@]} -gt 0 ] || return 0
+    echo "🐳 ${held[*]} held by Docker — stopping via $RUN_DIR/docker-run.sh stop..."
+    if ! get_sudo_password; then
+        echo "⚠️  No sudo password — ${held[*]} left running in Docker"
+        return 0
+    fi
+    case " ${held[*]} " in
+        *" fe "*) echo "   For the frontend it asks you to reload http://localhost:$FRONTEND_PORT, then press Enter." ;;
+    esac
+    ( cd "$PROJECT_ROOT" && "$RUN_DIR/docker-run.sh" stop "${held[@]}" ) ||
+        echo "⚠️  docker-run.sh stop reported a problem — see above"
+}
+
+# Stop whatever holds port $2 ($1 names it), its whole process group when it leads one, as
+# run-stack.sh --hard does for the Python services (each uvicorn leads its own group).
+free_port() {
+    local pids pid signal
+    for signal in TERM KILL; do
+        pids=$(ss -ltnpH "sport = :$2" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+        [ -n "$pids" ] || break
+        [ "$signal" = KILL ] || echo "$1 :$2: stopping it"
+        for pid in $pids; do
+            if [ "$(ps -o pgid= -p "$pid" | tr -d ' ')" = "$pid" ]; then
+                kill -"$signal" -- "-$pid"
+            else
+                kill -"$signal" "$pid"
+            fi 2>/dev/null || true
+        done
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            ss -ltnH "sport = :$2" | grep -q . || return 0
+            sleep 0.5
+        done
+    done
+    ! ss -ltnH "sport = :$2" | grep -q . || echo "⚠️  $1: could not free :$2" >&2
+}
+
+# Python service ports, as run-stack.sh lists them.
+py_port() {
+    case "$1" in
+        sticker-api) echo 8083 ;;
+        sticker-worker) echo 8084 ;;
+        cad-api) echo 8085 ;;
+        cad-worker) echo 8086 ;;
+        capture-api) echo 8087 ;;
+        capture-worker) echo 8088 ;;
+    esac
+}
+
+# The ngrok agent of tunnel $1, found by its reserved domain $2: the ngrok1 / ngrok2 aliases put it in
+# the agent's arguments. Any other ngrok agent keeps running.
+stop_tunnel() {
+    local pid found=0
+    for pid in $(pgrep -x ngrok); do
+        if tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$2"; then
+            kill "$pid" 2>/dev/null && found=1
+        fi
+    done
+    if [ "$found" = 1 ]; then
+        echo "🌐 $1: stopped"
+    else
+        echo "ℹ️  $1: not running"
+    fi
+}
+
+# Stop: the ticked services, or with none ticked (Stop all) every service the start window offers,
+# however each runs and whichever folder started it (they all share these ports). Docker first, as
+# run.sh cannot free a port Docker holds.
+stop_services() {
+    local webs=( "${WEB_SERVICES[@]}" ) pys=( "${PY_SERVICES[@]}" ) all=0 web name port ports=() left=()
+    if [ ${#webs[@]} -eq 0 ] && [ ${#pys[@]} -eq 0 ] && ! picked ngrok-primary && ! picked ngrok-import; then
+        all=1
+        webs=( primary import fe )
+        pys=( capture-api capture-worker sticker-api sticker-worker cad-api cad-worker )
+    fi
+    echo ""
+    if [ "$all" = 1 ]; then
+        echo "🛑 Stopping every running service..."
+    else
+        echo "🛑 Stopping the ticked services..."
+    fi
+    stop_docker_held "${webs[@]}"
+    # run.sh's own stop also ends the watcher it started (npm + nest --watch, ng serve), not just the port holder.
+    for web in "${webs[@]}"; do
+        ( cd "$PROJECT_ROOT" && "$RUN_DIR/run.sh" __stop "$web" )
+        ports+=( "$(web_port "$web")" )
+    done
+    for name in "${pys[@]}"; do
+        port=$(py_port "$name")
+        free_port "$name" "$port"
+        ports+=( "$port" )
+    done
+    if [ "$all" = 1 ]; then
+        # Every ngrok agent of this user: the two tunnels are its only ones.
+        if pgrep -x ngrok >/dev/null; then
+            echo "🌐 Stopping the ngrok tunnels"
+            pkill -x ngrok || true
+        fi
+    else
+        if picked ngrok-primary; then stop_tunnel "Primary API tunnel" "${NGROK_PRIMARY_URL#https://}"; fi
+        if picked ngrok-import; then stop_tunnel "Import API tunnel" "${NGROK_IMPORT_URL#https://}"; fi
+    fi
+    for port in "${ports[@]}"; do
+        if ss -ltnH "sport = :$port" | grep -q .; then left+=( ":$port" ); fi
+    done
+    if [ ${#left[@]} -gt 0 ]; then
+        echo "⚠️  Still in use: ${left[*]} — see above"
+    else
+        echo "✅ Stopped"
+    fi
+}
+
 # Ask ONCE what to start: services-dialog.py shows one window with the folder, run.sh or Docker for the
-# web stack and a check box per service, with Cancel, Restart (stop what is running for the ticked
-# services first) and Start. Primary API, Import API and the frontend are ticked, but nothing starts
-# until Start or Restart is clicked. When it cannot open, the zenity folder list, then zenity's
-# checklist or a numbered prompt stand in, with Docker and hard reload as rows (zenity returns the
-# ticked rows for its OK button only); they wait for an answer too.
-# Sets PROJECT_FOLDER, SELECTED (the ticked keys, "|"-separated, plus "docker" and "hard"; test one
-# with `picked`), WEB_SERVICES (run.sh / docker-run.sh names) and PY_SERVICES (wr.sh names).
+# web stack and a check box per service, with Cancel, Stop all (every running service, whatever is
+# ticked), Stop (the ticked services), Restart (stop what is running for the ticked services first)
+# and Start. Primary API, Import API and the frontend are ticked, but nothing starts until Start or
+# Restart is clicked. When it cannot open, the zenity folder list, then zenity's checklist or a
+# numbered prompt stand in, with Docker, hard reload and Stop as rows (zenity returns the ticked rows
+# for its OK button only); they wait for an answer too.
+# Sets PROJECT_FOLDER, SELECTED (the ticked keys, "|"-separated, plus "docker", "hard" or "stop";
+# "stop" with no service is Stop all; test one with `picked`), WEB_SERVICES (run.sh / docker-run.sh
+# names) and PY_SERVICES (wr.sh names).
 select_services() {
     # "#|group|description", or key|ticked by default|title|subtitle|ports. A Python service key starts
     # its API and worker: <key>-api and <key>-worker in wr.sh.
@@ -278,7 +428,8 @@ select_services() {
             done
             rows+=( FALSE "docker" "Run Primary API, Import API and frontend in Docker (docker-run.sh)" )
             rows+=( FALSE "hard" "Restart — stop what is running first, then start it fresh" )
-            keys+=( "docker" "hard" )
+            rows+=( FALSE "stop" "Stop — stop the ticked services however they run, or all of them when none is ticked; starts nothing" )
+            keys+=( "docker" "hard" "stop" )
             status=0
             if command -v zenity >/dev/null 2>&1; then
                 choice=$(zenity --list --checklist \
@@ -352,7 +503,7 @@ trap cleanup SIGINT SIGTERM
 # ── Pick the folder, run.sh or Docker, the services and hard reload, in ONE window ──
 select_services
 
-if [ ${#WEB_SERVICES[@]} -eq 0 ] && [ ${#PY_SERVICES[@]} -eq 0 ] && ! picked ngrok-primary && ! picked ngrok-import; then
+if ! picked stop && [ ${#WEB_SERVICES[@]} -eq 0 ] && [ ${#PY_SERVICES[@]} -eq 0 ] && ! picked ngrok-primary && ! picked ngrok-import; then
     echo "ℹ️  No service selected — nothing to start."
     exec bash
 fi
@@ -365,6 +516,14 @@ if [ ! -d "$PROJECT_ROOT/backendApi" ] || [ ! -d "$PROJECT_ROOT/dbMigrations" ];
 fi
 echo "🎯 Running project from: $PROJECT_ROOT"
 echo "=================================================="
+
+# Stop and Stop all start nothing, whatever else is ticked (the zenity fallback can tick Restart too).
+# `|| true`: one stop that fails must not end the launcher before the rest.
+if picked stop; then
+    stop_services || true
+    echo ""
+    exec bash
+fi
 
 HARD_ARG=()
 if picked hard; then
@@ -397,31 +556,21 @@ if [ ${#WEB_SERVICES[@]} -gt 0 ] && picked docker; then
     # docker-run.sh asks for the sudo password once, builds the images from a snapshot of the folder,
     # starts the containers and opens its own window with a tab per log (logs in /var/www/html/.run).
     # With h it first stops the run.sh services holding those ports. Node runs inside the images.
+    # The password is asked for in a window first, so docker-run.sh finds sudo already unlocked.
     echo ""
     echo "🐳 Starting ${WEB_SERVICES[*]} via $RUN_DIR/docker-run.sh..."
-    ( cd "$PROJECT_ROOT" && "$RUN_DIR/docker-run.sh" "${WEB_SERVICES[@]}" "${HARD_ARG[@]}" ) ||
-        echo "⚠️  docker-run.sh reported a problem — see above"
+    if get_sudo_password; then
+        ( cd "$PROJECT_ROOT" && "$RUN_DIR/docker-run.sh" "${WEB_SERVICES[@]}" "${HARD_ARG[@]}" ) ||
+            echo "⚠️  docker-run.sh reported a problem — see above"
+    else
+        echo "⚠️  No sudo password — ${WEB_SERVICES[*]} not started"
+        WEB_SERVICES=()
+    fi
 elif [ ${#WEB_SERVICES[@]} -gt 0 ]; then
-    # run.sh cannot see or stop docker-run.sh's containers: they run as root, so no pid shows for their
-    # ports. On hard reload, a ticked port held that way is freed through docker-run.sh stop first.
+    # On hard reload, a ticked port docker-run.sh's containers hold is freed through docker-run.sh stop
+    # first: run.sh cannot see or stop them.
     if picked hard; then
-        held=()
-        for web in "${WEB_SERVICES[@]}"; do
-            case "$web" in
-                primary) port=$PRIMARY_API_PORT ;;
-                import) port=$IMPORT_API_PORT ;;
-                fe) port=$FRONTEND_PORT ;;
-            esac
-            if ss -ltnH "sport = :$port" | grep -q . && ! ss -ltnpH "sport = :$port" | grep -q 'pid='; then
-                held+=( "$web" )
-            fi
-        done
-        if [ ${#held[@]} -gt 0 ]; then
-            echo "🐳 ${held[*]} held by Docker — stopping via $RUN_DIR/docker-run.sh stop (asks for sudo;"
-            echo "   for the frontend it also asks you to reload http://localhost:$FRONTEND_PORT, then press Enter)..."
-            ( cd "$PROJECT_ROOT" && "$RUN_DIR/docker-run.sh" stop "${held[@]}" ) ||
-                echo "⚠️  docker-run.sh stop reported a problem — see above"
-        fi
+        stop_docker_held "${WEB_SERVICES[@]}"
     fi
     # run.sh starts them detached (logs in /var/www/html/.run) in its own window, a tab per log, and
     # its frontend waits for both API ports itself. The subshell keeps the cd and nvm out of the

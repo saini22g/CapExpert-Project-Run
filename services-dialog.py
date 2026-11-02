@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """The launcher's start window: the project folder, run.sh or Docker for the web stack, and a check box
-per service, with Cancel, Restart and Start.
+per service, with Cancel, Stop all, Stop, Restart and Start.
 
     services-dialog.py ROOT FOLDER[,FOLDER...] ENTRY [ENTRY ...]
 
 FOLDERS are folder names under ROOT; the first is selected. Each ENTRY is a group heading,
 "#|title|description", or a service, "key|TRUE or FALSE|title|subtitle|ports". The run.sh / Docker
 switch sits in the group of the first web service (primary, import, fe). Nothing starts on its own:
-the window waits for Start, Restart or Cancel.
+the window waits for Start, Restart, Stop, Stop all or Cancel.
 
 Start prints two lines, the folder name and the ticked keys joined by "|", with "docker" added when the
-web stack runs in Docker; Restart prints the same with "hard" added. Both exit 0. Cancel, Esc or
+web stack runs in Docker; Restart prints the same with "hard" added, Stop with "stop" added. Stop all
+prints the folder name and "stop" alone, whatever is ticked: "stop" with no service key means every
+service. All four exit 0. Cancel, Esc or
 closing the window prints nothing and exits 1. Exit 3: the window could not be shown (no GTK 4 /
 libadwaita bindings, no display, bad arguments), so the caller can fall back.
 """
@@ -27,8 +29,12 @@ WIDTH = 1100
 NARROW = "max-width: 720sp"
 MODE_NOTES = {
     False: "Dev watchers with live reload",
-    True: "Production build in containers. Asks for your sudo password, and code edits need another start",
+    True: "Production build in containers. Asks for your sudo password in a window, and code edits need another start",
 }
+# The launcher's icon, beside the title. Its letters are black, so it sits on a white tile that reads on
+# a dark header bar too.
+LOGO = os.path.join(os.path.dirname(os.path.realpath(__file__)), "logo-small.svg")
+LOGO_CSS = ".logo { background: white; border-radius: 6px; padding: 3px 5px; }"
 
 
 def parse(argv):
@@ -132,15 +138,35 @@ def run(root, folders, entries):
         checks.append((key, title, check))
 
     message = Gtk.Label(xalign=0, wrap=True, hexpand=True, css_classes=["heading"])
-    cancel = Gtk.Button(label="Cancel")
+
+    def icon_button(label, icon, **props):
+        return Gtk.Button(child=Adw.ButtonContent(icon_name=icon, label=label), **props)
+
+    cancel = icon_button("Cancel", "window-close-symbolic")
     # Plain: Start is the one action the window suggests, and a restart loses nothing.
-    restart = Gtk.Button(
-        label="Restart",
+    restart = icon_button(
+        "Restart",
+        "view-refresh-symbolic",
         tooltip_text="Stops the ticked services if they are running, then starts them fresh. Tunnels are not restarted",
     )
-    start = Gtk.Button(label="Start", css_classes=["suggested-action"])
+    # Plain like Restart: it acts on the ticked services, as Restart and Start do.
+    stop = icon_button(
+        "Stop",
+        "media-playback-stop-symbolic",
+        tooltip_text="Stops the ticked services and tunnels, from any folder, whether run.sh, Docker or wr.sh "
+        "started them. Starts nothing",
+    )
+    # Red, and apart from the three that act on the ticks: it ends everything, whatever is ticked.
+    stop_all = icon_button(
+        "Stop all",
+        "media-playback-stop-symbolic",
+        css_classes=["destructive-action"],
+        tooltip_text="Stops every service in this window that is running, from any folder, whether run.sh, "
+        "Docker or wr.sh started it, and the ngrok tunnels. Starts nothing",
+    )
+    start = icon_button("Start", "media-playback-start-symbolic", css_classes=["suggested-action"])
     buttons = Gtk.Box(spacing=8, valign=Gtk.Align.CENTER)
-    for button in (cancel, restart, start):
+    for button in (cancel, stop_all, stop, restart, start):
         buttons.append(button)
     bar = Gtk.Box(spacing=18, margin_top=12, margin_bottom=12, margin_start=18, margin_end=18)
     bar.append(message)
@@ -155,7 +181,17 @@ def run(root, folders, entries):
     )
 
     view = Adw.ToolbarView(content=scroller, bottom_bar_style=Adw.ToolbarStyle.RAISED)
-    view.add_top_bar(Adw.HeaderBar(title_widget=Adw.WindowTitle(title="CapExpert", subtitle="Start services")))
+    css = Gtk.CssProvider()
+    css.load_from_string(LOGO_CSS)
+    Gtk.StyleContext.add_provider_for_display(display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    logo = Gtk.Box(valign=Gtk.Align.CENTER, css_classes=["logo"])
+    picture = Gtk.Picture.new_for_filename(LOGO)
+    picture.set_can_shrink(False)
+    logo.append(picture)
+    heading = Gtk.Box(spacing=10)
+    heading.append(logo)
+    heading.append(Adw.WindowTitle(title="CapExpert", subtitle="Start services"))
+    view.add_top_bar(Adw.HeaderBar(title_widget=heading))
     view.add_bottom_bar(bar)
 
     # Fits the smallest screen attached, whichever one the window opens on: 90 % of its width, and
@@ -184,15 +220,20 @@ def run(root, folders, entries):
         mode_row.set_sensitive(any(key in WEB_KEYS for key, _ in ticked))
         message.set_label(summary(name, ok, ticked, docker.get_active()))
         startable = ok and bool(ticked)
-        start.set_sensitive(startable)
-        restart.set_sensitive(startable)
+        for button in (start, restart, stop):
+            button.set_sensitive(startable)
+        # The ticks do not matter to it, but the stop scripts still run from a workspace.
+        stop_all.set_sensitive(ok)
 
-    def respond(hard):
+    def respond(action=None):
         keys = [key for key, _, check in checks if check.get_active()]
         if docker.get_active():
             keys.append("docker")
-        if hard:
-            keys.append("hard")
+        if action:
+            keys.append(action)
+        finish(keys)
+
+    def finish(keys):
         print(folders[folder_row.get_selected()])
         print("|".join(keys))
         status[0] = 0
@@ -203,8 +244,10 @@ def run(root, folders, entries):
     for _, _, check in checks:
         check.connect("toggled", update)
     cancel.connect("clicked", lambda *_: loop.quit())
-    restart.connect("clicked", lambda *_: respond(True))
-    start.connect("clicked", lambda *_: respond(False))
+    stop_all.connect("clicked", lambda *_: finish(["stop"]))
+    stop.connect("clicked", lambda *_: respond("stop"))
+    restart.connect("clicked", lambda *_: respond("hard"))
+    start.connect("clicked", lambda *_: respond())
     window.connect("close-request", lambda *_: loop.quit() or False)
     escape = Gtk.ShortcutController()
     escape.add_shortcut(

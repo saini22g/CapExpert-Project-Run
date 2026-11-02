@@ -9,14 +9,14 @@ CapExpert/
 ├── launcher.sh                    # Main launcher script with project selection
 ├── launcher.desktop               # Ubuntu desktop entry
 ├── setup-launcher.sh              # Installation script
-├── services-dialog.py             # Start window: folder, run.sh or Docker, services (Cancel / Restart / Start)
+├── services-dialog.py             # Start window: folder, run.sh or Docker, services (Cancel / Stop all / Stop / Restart / Start)
 ├── logo-small.svg                 # Application icon
 └── README.md                      # This file
 ```
 
 ## ✨ Features
 
-- 🎯 **One Start Window**: Pick capClone, capClone1, capClone2 or capCloneDev, run.sh or Docker, and what to start — Primary API, Import API, capExpertApp, Capture / Sticker / CAD, both ngrok tunnels — with **Start**, **Restart** and **Cancel**
+- 🎯 **One Start Window**: Pick capClone, capClone1, capClone2 or capCloneDev, run.sh or Docker, and what to start — Primary API, Import API, capExpertApp, Capture / Sticker / CAD, both ngrok tunnels — with **Start**, **Restart**, **Stop**, **Stop all** and **Cancel**
 - 🐳 **run.sh or Docker**: The web stack runs as dev watchers through `run.sh`, or as production containers through `docker-run.sh`
 - 🔗 **Shared Run Scripts**: `run.sh`, `docker-run.sh` and `wr.sh` live once in `/var/www/html/CapExpert_run` and are linked into every folder
 - 🚀 **Smart Startup Sequencing**: run.sh / docker-run.sh start the APIs first; the frontend waits for them
@@ -46,10 +46,12 @@ Primary API, Import API and the frontend are ticked, and the line above the butt
 |---|---|
 | **Start** | Starts the ticked services; one that is already running is left alone (Docker: rebuilt and replaced) |
 | **Restart** | Stops what is already running for the ticked services first, then starts them fresh (hard reload, `h`) |
+| **Stop** | Stops the ticked services and tunnels, however they run and whichever folder started them. Starts nothing |
+| **Stop all** (red) | Stops every service below that is running, whatever is ticked: from any folder, run.sh, Docker or `wr.sh`, and every ngrok agent. Starts nothing |
 | **Cancel** (or Esc) | Starts nothing |
 
-Start and Restart stay greyed out while nothing is ticked, or when the folder has no `backendApi`
-or `dbMigrations`.
+Start, Restart and Stop stay greyed out while nothing is ticked, or when the folder has no
+`backendApi` or `dbMigrations`; Stop all only in the second case (it runs the stop scripts from that folder).
 
 | Service | Port | Started by |
 |---|---|---|
@@ -63,7 +65,7 @@ Restart is passed to `run.sh` / `docker-run.sh` / `wr.sh` as `h`; the ngrok tunn
 
 The window is `services-dialog.py` (GTK 4 / libadwaita, the same toolkit zenity 4 draws with).
 When it cannot open (no display, no bindings), the launcher falls back to the zenity folder list
-and a zenity checklist, or numbered prompts, with Docker and Restart as the last rows.
+and a zenity checklist, or numbered prompts, with Docker, Restart and Stop as the last rows (Stop with no service ticked stops them all).
 
 ### Shared Run Scripts (`/var/www/html/CapExpert_run`)
 `run.sh` (web / mobile stack, dev watchers), `docker-run.sh` (web stack in Docker) and `wr.sh`
@@ -98,7 +100,7 @@ run. The Python services (always `wr.sh`) and the ngrok tunnels are not affected
 |---|---|---|
 | What runs | `nest start --watch` and `ng serve`, live reload | Production images under pm2, and the frontend's production build behind nginx, built from a snapshot of the folder |
 | Node | nvm 20.19 | 24.22.1, inside the images |
-| sudo | No | Asks for the password once, in the launcher's terminal |
+| sudo | No | Asks for the password once, in a password window (as the db import launcher does) |
 | **Start** when already running | Leaves it alone | Rebuilds and replaces its containers; stops with "port in use" when `run.sh` holds the port |
 | **Restart** | Stops the ticked services, then starts them | Stops the `run.sh` services on those ports, then builds and starts |
 | Logs, in `/var/www/html/.run/` | `<name>.log` | `docker-<name>.log`, plus `docker-fe-build.log` |
@@ -107,8 +109,8 @@ run. The Python services (always `wr.sh`) and the ngrok tunnels are not affected
 
 `run.sh` cannot see or stop the Docker containers (they run as root). To go back from Docker to
 run.sh, pick run.sh and **Restart**: a ticked port held that way is freed with
-`docker-run.sh stop` first, which asks for sudo (and, for the frontend, to reload the page in each
-open browser).
+`docker-run.sh stop` first, which asks for the sudo password in a window (and, for the frontend, in the
+terminal, to reload the page in each open browser). **Stop** and **Stop all** do the same.
 
 All four folders share these ports, so switching folders also needs **Restart**: a plain Start
 sees the port in use and leaves the other folder's service running.
@@ -164,9 +166,9 @@ The setup script will:
 ## 🔧 How It Works
 
 1. **Start Window**:
-   - One window: folder, run.sh or Docker for the web stack, the services, and Start / Restart / Cancel
-     (see *Start Window*)
-   - Waits for Start, Restart or Cancel; nothing starts on its own
+   - One window: folder, run.sh or Docker for the web stack, the services, and Start / Restart /
+     Stop / Stop all / Cancel (see *Start Window*)
+   - Waits for Start, Restart, Stop, Stop all or Cancel; nothing starts on its own
 
 2. **Workspace Check**:
    - The folder must have `backendApi` and `dbMigrations`; otherwise the launcher stops with an error
@@ -187,7 +189,7 @@ The setup script will:
 5. **Service Management**:
    - Each service's log is followed in a named tab of the run.sh / docker-run.sh / wr.sh window
    - Closing a tab or Ctrl+C in it stops following the log, not the service: use **Restart** to stop
-     and start again
+     and start again, or **Stop** / **Stop all**
 
 ## ⚙️ Configuration
 
@@ -284,6 +286,11 @@ ps aux | grep -E "node.*capClone|node.*capExpert"
   by every workspace
 
 ### Stop Services
+- **Stop all** in the start window stops everything it offers, however it runs: Docker containers
+  through `docker-run.sh stop` (sudo password in a window), the `run.sh` services with their watchers,
+  the `wr.sh` services by port (8083–8088), and every ngrok agent; it then lists any port still in use
+- **Stop** does the same for the ticked services only. A ticked tunnel's ngrok agent is found by its
+  domain, so the other tunnel keeps running
 - **Restart** in the start window stops and starts the ticked services
 - A `run.sh` service: `kill -TERM -- -$(cat /var/www/html/.run/primary.pid)` (`import`, `fe`), which ends
   its whole process group; killing just the port holder leaves the watcher to start it again
